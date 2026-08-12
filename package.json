@@ -1,0 +1,36 @@
+{
+  "name": "atlas-monorepo",
+  "version": "0.1.0",
+  "description": "ATLAS — Full-stack monorepo (engine + backend + frontend)",
+  "private": true,
+  "workspaces": [
+    "engine",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "dev:engine": "npm run dev --workspace=engine",
+    "install:all": "npm install",
+    "test": "npm test --workspaces",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/atlas"
+  },
+  "keywords": [
+    "alternate-history",
+    "simulation",
+    "saas",
+    "subscription",
+    "archive"
+  ],
+  "author": "",
+  "license": "UNLICENSED"
+}

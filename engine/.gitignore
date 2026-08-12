@@ -1,0 +1,31 @@
+# Engine .gitignore
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Database
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+
+# Generated snapshots (version controlled separately)
+data/snapshots/*.json
+
+# Test coverage
+coverage/
+*.lcov
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

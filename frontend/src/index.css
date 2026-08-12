@@ -1,0 +1,297 @@
+/*
+ * src/index.css
+ *
+ * ATLAS — Global Styles
+ *
+ * Design system implemented exactly per DESIGN.md.
+ * All values reference Tailwind config tokens — never hardcoded here
+ * except where CSS features require it (e.g. @font-face, :root vars).
+ *
+ * Token reference: frontend/tailwind.config.js
+ * Design authority: DESIGN.md (Atlas-main repo root)
+ */
+
+/* ── Font loading ─────────────────────────────────────────────────────── */
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@400,500,600,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+/* ── Tailwind directives ──────────────────────────────────────────────── */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base reset & global defaults ─────────────────────────────────────── */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  /* DESIGN.md: white page background */
+  body {
+    @apply bg-ground text-ink font-sans;
+    font-size: 16px;
+    line-height: 1.5;
+    font-weight: 500;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* DESIGN.md: display and title have tight negative tracking */
+  h1, h2 {
+    @apply tracking-tight;
+  }
+
+  /* Remove default list styles for nav lists */
+  nav ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Accessible focus ring — subtle neutral/black focus indicator */
+  :focus-visible {
+    outline: 2px solid #000000;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Links per DESIGN.md: no default browser underline anywhere */
+  a {
+    color: inherit;
+    text-decoration: none;
+    transition: color 150ms ease;
+  }
+  a:hover {
+    text-decoration: none;
+  }
+
+  /* Respect reduced motion per DESIGN.md performance requirement */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ── Component utilities ─────────────────────────────────────────────── */
+@layer components {
+
+  /*
+   * Typography scale — DESIGN.md
+   * Applied as utility classes matching the spec names.
+   */
+  .text-year {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 80px;
+    line-height: 1.0;
+    font-weight: 500;
+    letter-spacing: 0;
+  }
+
+  .text-display {
+    font-family: 'Satoshi', sans-serif;
+    font-size: 64px;
+    line-height: 1.02;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .text-title {
+    font-family: 'Satoshi', sans-serif;
+    font-size: 40px;
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .text-heading {
+    font-family: 'Satoshi', sans-serif;
+    font-size: 28px;
+    line-height: 1.2;
+    font-weight: 600;
+  }
+
+  .text-subhead {
+    font-family: 'Satoshi', sans-serif;
+    font-size: 20px;
+    line-height: 1.3;
+    font-weight: 600;
+  }
+
+  .text-body-long {
+    font-family: 'Newsreader', Georgia, serif;
+    font-size: 18px;
+    line-height: 1.7;
+    font-weight: 400;
+  }
+
+  /* Mobile overrides per DESIGN.md */
+  @media (max-width: 768px) {
+    .text-year    { font-size: 52px; }
+    .text-display { font-size: 40px; }
+    .text-title   { font-size: 30px; }
+  }
+
+  /*
+   * Buttons — DESIGN.md: pill shape (9999px), 44px min height, three variants
+   */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2;
+    min-height: 44px;
+    padding: 0 24px;
+    border-radius: 9999px;
+    font-family: 'Satoshi', sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+    white-space: nowrap;
+    text-decoration: none;
+  }
+
+  /* Primary: ink fill, paper text */
+  .btn-primary {
+    @apply btn bg-ink text-paper border border-ink;
+  }
+  .btn-primary:hover {
+    background-color: #2a2a28;
+    border-color: #2a2a28;
+  }
+
+  /* Secondary: paper fill, rule border, ink text */
+  .btn-secondary {
+    @apply btn bg-paper text-ink border border-rule;
+  }
+  .btn-secondary:hover {
+    @apply border-ink;
+  }
+
+  /* Ghost: no fill, no border, ink text */
+  .btn-ghost {
+    @apply btn bg-transparent text-ink border-transparent;
+  }
+  .btn-ghost:hover {
+    @apply bg-rule;
+  }
+
+  /*
+   * Cards — DESIGN.md: paper fill, 1px rule border, 12px radius, 24px padding, no shadow
+   */
+  .card {
+    @apply bg-paper border border-rule rounded-card p-6;
+  }
+
+  /*
+   * Chips — DESIGN.md: paper pill, 1px rule border, accent-soft when active
+   */
+  .chip {
+    @apply inline-flex items-center gap-1 px-4 py-2;
+    min-height: 36px;
+    border-radius: 9999px;
+    background-color: #FFFFFF;
+    border: 1px solid #E4E2DE;
+    font-family: 'Satoshi', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    color: #111110;
+    cursor: pointer;
+    transition: background-color 150ms ease, border-color 150ms ease;
+  }
+
+  .chip:hover {
+    border-color: #111110;
+  }
+
+  .chip.active {
+    background-color: #000000;
+    border-color: #000000;
+    color: #FFFFFF;
+  }
+
+  /*
+   * Inputs — DESIGN.md: 44px height, 12px radius, 1px rule border, ink border on focus
+   */
+  .input {
+    @apply w-full bg-paper border border-rule rounded-card text-ink;
+    height: 44px;
+    padding: 0 16px;
+    font-family: 'Satoshi', sans-serif;
+    font-size: 16px;
+    font-weight: 500;
+    transition: border-color 150ms ease;
+  }
+
+  .input:focus {
+    outline: none;
+    border-color: #111110;
+    box-shadow: 0 0 0 2px rgba(17, 17, 16, 0.1);
+  }
+
+  .input::placeholder {
+    color: #9C9891;
+  }
+
+  /*
+   * Badges — DESIGN.md & Figma: small mono pills and outline tags
+   */
+  .badge {
+    @apply inline-flex items-center;
+    padding: 2px 10px;
+    border-radius: 9999px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  /* Active/live badge: black fill */
+  .badge-active {
+    @apply badge bg-black text-white;
+  }
+
+  /* Passive label badge: soft neutral fill */
+  .badge-soft {
+    @apply badge bg-neutral-100 text-ink;
+  }
+
+  /* Figma alert outline badge */
+  .badge-alert {
+    @apply inline-flex items-center px-3 py-1 text-xs font-sans font-medium border border-rose-500 text-rose-600 bg-rose-50 rounded-md;
+  }
+
+  /* Figma tag chip */
+  .badge-tag {
+    @apply inline-flex items-center px-3 py-1 text-xs font-sans font-medium border border-rule bg-ground/50 text-ink-muted rounded-md;
+  }
+
+  /*
+   * Figma Black Pill Tabs (Nav & Category Tabs)
+   */
+  .tab-pill {
+    @apply px-5 py-2.5 rounded-md text-sm font-medium transition-all duration-hover flex items-center justify-center cursor-pointer;
+  }
+  .tab-pill-active {
+    @apply tab-pill bg-ink text-paper font-semibold shadow-xs;
+  }
+  .tab-pill-inactive {
+    @apply tab-pill text-ink hover:text-ink hover:bg-ground/60;
+  }
+
+  /*
+   * Section container
+   */
+  .section-container {
+    @apply w-full max-w-content mx-auto px-4 md:px-8;
+  }
+}

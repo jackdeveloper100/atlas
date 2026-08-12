@@ -1,0 +1,31 @@
+{
+  "name": "atlas-engine",
+  "version": "0.1.0",
+  "description": "ATLAS Simulation Engine — Node.js",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "simulate": "node src/index.js",
+    "simulate:10": "node src/index.js --years=10",
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "keywords": [
+    "simulation",
+    "history",
+    "alternate-history"
+  ],
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "stripe": "^22.4.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
