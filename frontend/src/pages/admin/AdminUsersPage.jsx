@@ -1,13 +1,13 @@
 /**
  * AdminUsersPage.jsx
  *
- * User account management view with search, subscription status badges,
- * role assignment, and detail inspection.
+ * Full User CRUD administration view (Create, Read, Update, Delete) with search,
+ * subscription status indicators, and role management.
  */
 
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Shield, User, ExternalLink, RefreshCw } from 'lucide-react';
+import { Search, Shield, User, ExternalLink, RefreshCw, UserPlus, Edit3, Trash2, AlertTriangle } from 'lucide-react';
 import adminService from '../../services/admin.service';
 
 export default function AdminUsersPage() {
@@ -18,11 +18,33 @@ export default function AdminUsersPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
-  // Role Change Modal state
-  const [selectedUser, setSelectedUser] = useState(null);
-  const [targetRole, setTargetRole] = useState('user');
-  const [updatingRole, setUpdatingRole] = useState(false);
-  const [roleMessage, setRoleMessage] = useState('');
+  // Modals state
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [deleteUserTarget, setDeleteUserTarget] = useState(null);
+
+  // Create User Form State
+  const [createForm, setCreateForm] = useState({
+    email: '',
+    password: '',
+    displayName: '',
+    role: 'user',
+  });
+  const [creating, setCreating] = useState(false);
+  const [createMessage, setCreateMessage] = useState({ type: '', text: '' });
+
+  // Edit User Form State
+  const [editForm, setEditForm] = useState({
+    displayName: '',
+    role: 'user',
+    password: '',
+  });
+  const [updating, setUpdating] = useState(false);
+  const [editMessage, setEditMessage] = useState({ type: '', text: '' });
+
+  // Delete User State
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState({ type: '', text: '' });
 
   useEffect(() => {
     fetchUsers();
@@ -52,53 +74,131 @@ export default function AdminUsersPage() {
     fetchUsers();
   }
 
-  async function handleRoleUpdate(e) {
+  // Create User Handler
+  async function handleCreateUser(e) {
     e.preventDefault();
-    if (!selectedUser) return;
+    setCreateMessage({ type: '', text: '' });
+    setCreating(true);
 
     try {
-      setUpdatingRole(true);
-      setRoleMessage('');
-      const res = await adminService.updateUserRole(selectedUser.id, targetRole);
+      const res = await adminService.createUser({
+        email: createForm.email,
+        password: createForm.password,
+        displayName: createForm.displayName,
+        role: createForm.role,
+      });
+
       if (res.success) {
-        setRoleMessage(`Role updated successfully to '${targetRole}'`);
+        setCreateMessage({ type: 'success', text: 'User account created successfully.' });
         setTimeout(() => {
-          setSelectedUser(null);
+          setIsCreateOpen(false);
+          setCreateForm({ email: '', password: '', displayName: '', role: 'user' });
+          setCreateMessage({ type: '', text: '' });
           fetchUsers();
         }, 1000);
       } else {
-        setRoleMessage(`Error: ${res.error}`);
+        setCreateMessage({ type: 'error', text: res.error || 'Failed to create user.' });
       }
     } catch (err) {
-      setRoleMessage(`Error: ${err.message}`);
+      setCreateMessage({ type: 'error', text: err.message || 'Failed to create user.' });
     } finally {
-      setUpdatingRole(false);
+      setCreating(false);
+    }
+  }
+
+  // Edit User Handler
+  async function handleEditUser(e) {
+    e.preventDefault();
+    if (!editUser) return;
+
+    setEditMessage({ type: '', text: '' });
+    setUpdating(true);
+
+    try {
+      const res = await adminService.updateUser(editUser.id, {
+        displayName: editForm.displayName,
+        role: editForm.role,
+        password: editForm.password || undefined,
+      });
+
+      if (res.success) {
+        setEditMessage({ type: 'success', text: 'User account updated successfully.' });
+        setTimeout(() => {
+          setEditUser(null);
+          setEditMessage({ type: '', text: '' });
+          fetchUsers();
+        }, 1000);
+      } else {
+        setEditMessage({ type: 'error', text: res.error || 'Failed to update user.' });
+      }
+    } catch (err) {
+      setEditMessage({ type: 'error', text: err.message || 'Failed to update user.' });
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  // Delete User Handler
+  async function handleDeleteUser() {
+    if (!deleteUserTarget) return;
+
+    setDeleteMessage({ type: '', text: '' });
+    setDeleting(true);
+
+    try {
+      const res = await adminService.deleteUser(deleteUserTarget.id);
+      if (res.success) {
+        setDeleteMessage({ type: 'success', text: 'User account deleted successfully.' });
+        setTimeout(() => {
+          setDeleteUserTarget(null);
+          setDeleteMessage({ type: '', text: '' });
+          fetchUsers();
+        }, 1000);
+      } else {
+        setDeleteMessage({ type: 'error', text: res.error || 'Failed to delete user.' });
+      }
+    } catch (err) {
+      setDeleteMessage({ type: 'error', text: err.message || 'Failed to delete user.' });
+    } finally {
+      setDeleting(false);
     }
   }
 
   return (
     <div className="space-y-6">
-      {/* Page Header & Search */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* Page Header & Search + Create Button */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-display font-bold text-ink">
             User Accounts
           </h1>
-          <p className="text-sm text-ink/60 mt-1">
-            Manage system users, view subscription statuses, and assign roles.
-          </p>
         </div>
 
-        <form onSubmit={handleSearchSubmit} className="relative w-full sm:w-72">
-          <input
-            type="text"
-            placeholder="Search by display name..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-paper border border-rule rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-black"
-          />
-          <Search className="w-4 h-4 text-ink/40 absolute left-3 top-3" />
-        </form>
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          <form onSubmit={handleSearchSubmit} className="relative w-full sm:w-64">
+            <input
+              type="text"
+              placeholder="Search by display name..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 bg-paper border border-rule rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-black"
+            />
+            <Search className="w-4 h-4 text-ink/40 absolute left-3 top-3" />
+          </form>
+
+          <button
+            type="button"
+            onClick={() => {
+              setCreateForm({ email: '', password: '', displayName: '', role: 'user' });
+              setCreateMessage({ type: '', text: '' });
+              setIsCreateOpen(true);
+            }}
+            className="w-full sm:w-auto px-4 py-2 bg-black text-white text-xs font-semibold rounded-lg hover:bg-neutral-800 transition-colors flex items-center justify-center gap-2 shrink-0"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Create New User</span>
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -173,24 +273,43 @@ export default function AdminUsersPage() {
                       <td className="py-3.5 px-4 text-xs text-ink/60">
                         {new Date(u.created_at).toLocaleDateString()}
                       </td>
-                      <td className="py-3.5 px-4 text-right space-x-2">
-                        <Link
-                          to={`/admin/users/${u.id}`}
-                          className="inline-flex items-center text-xs font-medium text-ink hover:underline gap-1"
-                        >
-                          Details <ExternalLink className="w-3 h-3" />
-                        </Link>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedUser(u);
-                            setTargetRole(u.role || 'user');
-                            setRoleMessage('');
-                          }}
-                          className="px-2.5 py-1 text-xs font-medium rounded border border-rule hover:bg-black/5 text-ink transition-colors"
-                        >
-                          Change Role
-                        </button>
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="flex items-center justify-end space-x-2">
+                          <Link
+                            to={`/admin/users/${u.id}`}
+                            className="p-1.5 text-ink/70 hover:text-ink hover:bg-black/5 rounded transition-colors"
+                            title="View User Details"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditUser(u);
+                              setEditForm({
+                                displayName: u.display_name || '',
+                                role: u.role || 'user',
+                                password: '',
+                              });
+                              setEditMessage({ type: '', text: '' });
+                            }}
+                            className="p-1.5 text-ink/70 hover:text-ink hover:bg-black/5 rounded transition-colors"
+                            title="Edit User Account"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeleteUserTarget(u);
+                              setDeleteMessage({ type: '', text: '' });
+                            }}
+                            className="p-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
+                            title="Delete User Account"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -226,32 +345,78 @@ export default function AdminUsersPage() {
         )}
       </div>
 
-      {/* Role Assignment Modal */}
-      {selectedUser && (
+      {/* CREATE USER MODAL */}
+      {isCreateOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-md bg-paper border border-rule rounded-xl shadow-2xl p-6 text-ink">
             <h3 className="text-xl font-display font-bold text-ink">
-              Update User Role
+              Create New User
             </h3>
             <p className="text-xs text-ink/60 mt-1">
-              Target: <span className="font-mono">{selectedUser.display_name || selectedUser.id}</span>
+              Add a new user account to the system.
             </p>
 
-            {roleMessage && (
-              <div className="mt-4 p-3 rounded text-xs bg-ground border border-rule">
-                {roleMessage}
+            {createMessage.text && (
+              <div
+                className={`mt-4 p-3 rounded text-xs border ${createMessage.type === 'error'
+                  ? 'bg-red-50 text-red-700 border-red-200'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  }`}
+              >
+                {createMessage.text}
               </div>
             )}
 
-            <form onSubmit={handleRoleUpdate} className="mt-6 space-y-4">
+            <form onSubmit={handleCreateUser} className="mt-4 space-y-4">
               <div>
-                <label htmlFor="user-role-select" className="block text-xs font-semibold uppercase tracking-wider text-ink/60 mb-2">
-                  Select Role
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink/60 mb-1">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  value={createForm.email}
+                  onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
+                  required
+                  placeholder="user@example.com"
+                  className="w-full px-4 py-2 border border-rule rounded bg-paper text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink/60 mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={createForm.password}
+                  onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+                  required
+                  minLength={8}
+                  placeholder="Minimum 8 characters"
+                  className="w-full px-4 py-2 border border-rule rounded bg-paper text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink/60 mb-1">
+                  Display Name
+                </label>
+                <input
+                  type="text"
+                  value={createForm.displayName}
+                  onChange={(e) => setCreateForm({ ...createForm, displayName: e.target.value })}
+                  placeholder="e.g. John Doe"
+                  className="w-full px-4 py-2 border border-rule rounded bg-paper text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink/60 mb-1">
+                  Role
                 </label>
                 <select
-                  id="user-role-select"
-                  value={targetRole}
-                  onChange={(e) => setTargetRole(e.target.value)}
+                  value={createForm.role}
+                  onChange={(e) => setCreateForm({ ...createForm, role: e.target.value })}
                   className="w-full px-4 py-2 border border-rule rounded bg-paper text-sm focus:outline-none focus:ring-2 focus:ring-black"
                 >
                   <option value="user">User (Standard Access)</option>
@@ -262,21 +427,154 @@ export default function AdminUsersPage() {
               <div className="pt-4 flex justify-end space-x-2 border-t border-rule">
                 <button
                   type="button"
-                  onClick={() => setSelectedUser(null)}
+                  onClick={() => setIsCreateOpen(false)}
                   className="px-4 py-2 text-xs font-medium border border-rule rounded hover:bg-black/5"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={updatingRole}
+                  disabled={creating}
                   className="px-4 py-2 text-xs font-medium bg-black text-white rounded hover:bg-neutral-800 disabled:opacity-50 flex items-center gap-2"
                 >
-                  {updatingRole && <RefreshCw className="w-3 h-3 animate-spin" />}
-                  Save Role
+                  {creating && <RefreshCw className="w-3 h-3 animate-spin" />}
+                  Create User
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT USER MODAL */}
+      {editUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-paper border border-rule rounded-xl shadow-2xl p-6 text-ink">
+            <h3 className="text-xl font-display font-bold text-ink">
+              Edit User Account
+            </h3>
+            <p className="text-xs text-ink/60 mt-1">
+              Target ID: <span className="font-mono">{editUser.id}</span>
+            </p>
+
+            {editMessage.text && (
+              <div
+                className={`mt-4 p-3 rounded text-xs border ${editMessage.type === 'error'
+                  ? 'bg-red-50 text-red-700 border-red-200'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  }`}
+              >
+                {editMessage.text}
+              </div>
+            )}
+
+            <form onSubmit={handleEditUser} className="mt-4 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink/60 mb-1">
+                  Display Name
+                </label>
+                <input
+                  type="text"
+                  value={editForm.displayName}
+                  onChange={(e) => setEditForm({ ...editForm, displayName: e.target.value })}
+                  className="w-full px-4 py-2 border border-rule rounded bg-paper text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink/60 mb-1">
+                  Role
+                </label>
+                <select
+                  value={editForm.role}
+                  onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                  className="w-full px-4 py-2 border border-rule rounded bg-paper text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                >
+                  <option value="user">User (Standard Access)</option>
+                  <option value="admin">Admin (Full System Access)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-ink/60 mb-1">
+                  New Password (Optional Reset)
+                </label>
+                <input
+                  type="password"
+                  value={editForm.password}
+                  onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+                  placeholder="Leave blank to keep current password"
+                  className="w-full px-4 py-2 border border-rule rounded bg-paper text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+
+              <div className="pt-4 flex justify-end space-x-2 border-t border-rule">
+                <button
+                  type="button"
+                  onClick={() => setEditUser(null)}
+                  className="px-4 py-2 text-xs font-medium border border-rule rounded hover:bg-black/5"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updating}
+                  className="px-4 py-2 text-xs font-medium bg-black text-white rounded hover:bg-neutral-800 disabled:opacity-50 flex items-center gap-2"
+                >
+                  {updating && <RefreshCw className="w-3 h-3 animate-spin" />}
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE USER CONFIRMATION MODAL */}
+      {deleteUserTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-paper border border-rule rounded-xl shadow-2xl p-6 text-ink">
+            <div className="flex items-center space-x-3 text-red-600 mb-2">
+              <AlertTriangle className="w-6 h-6 shrink-0" />
+              <h3 className="text-xl font-display font-bold">
+                Delete User Account?
+              </h3>
+            </div>
+            <p className="text-xs text-ink/70 mt-2">
+              Are you sure you want to permanently delete user{' '}
+              <strong className="font-semibold text-ink">{deleteUserTarget.display_name || deleteUserTarget.id}</strong>?
+              This action will remove their profile and authentication credentials.
+            </p>
+
+            {deleteMessage.text && (
+              <div
+                className={`mt-4 p-3 rounded text-xs border ${deleteMessage.type === 'error'
+                  ? 'bg-red-50 text-red-700 border-red-200'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  }`}
+              >
+                {deleteMessage.text}
+              </div>
+            )}
+
+            <div className="pt-6 flex justify-end space-x-2 border-t border-rule mt-6">
+              <button
+                type="button"
+                onClick={() => setDeleteUserTarget(null)}
+                className="px-4 py-2 text-xs font-medium border border-rule rounded hover:bg-black/5"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={handleDeleteUser}
+                className="px-4 py-2 text-xs font-medium bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {deleting && <RefreshCw className="w-3 h-3 animate-spin" />}
+                Confirm Delete
+              </button>
+            </div>
           </div>
         </div>
       )}

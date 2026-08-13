@@ -78,15 +78,24 @@ describe('Middleware', () => {
     });
 
     it('should allow access (call next) for active status', async () => {
-      jest.spyOn(supabase, 'from').mockReturnValueOnce({
-        select: jest.fn().mockReturnThis(),
-        eq: jest.fn().mockReturnThis(),
-        order: jest.fn().mockReturnThis(),
-        limit: jest.fn().mockReturnThis(),
-        maybeSingle: jest.fn().mockResolvedValue({
-          data: { id: 'sub-1', status: 'active', current_period_end: new Date(Date.now() + 86400000).toISOString() },
-          error: null,
-        }),
+      jest.spyOn(supabase, 'from').mockImplementation((table) => {
+        if (table === 'profiles') {
+          return {
+            select: jest.fn().mockReturnThis(),
+            eq: jest.fn().mockReturnThis(),
+            maybeSingle: jest.fn().mockResolvedValue({ data: { role: 'user' }, error: null }),
+          };
+        }
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          order: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          maybeSingle: jest.fn().mockResolvedValue({
+            data: { id: 'sub-1', status: 'active', current_period_end: new Date(Date.now() + 86400000).toISOString() },
+            error: null,
+          }),
+        };
       });
 
       const req = { user: { id: 'test-user-id' } };
@@ -102,15 +111,24 @@ describe('Middleware', () => {
 
     it('should allow access (call next) for cancelled-but-active period in future', async () => {
       const futureDate = new Date(Date.now() + 86400000).toISOString();
-      jest.spyOn(supabase, 'from').mockReturnValueOnce({
-        select: jest.fn().mockReturnThis(),
-        eq: jest.fn().mockReturnThis(),
-        order: jest.fn().mockReturnThis(),
-        limit: jest.fn().mockReturnThis(),
-        maybeSingle: jest.fn().mockResolvedValue({
-          data: { id: 'sub-2', status: 'canceled', cancel_at_period_end: true, current_period_end: futureDate },
-          error: null,
-        }),
+      jest.spyOn(supabase, 'from').mockImplementation((table) => {
+        if (table === 'profiles') {
+          return {
+            select: jest.fn().mockReturnThis(),
+            eq: jest.fn().mockReturnThis(),
+            maybeSingle: jest.fn().mockResolvedValue({ data: { role: 'user' }, error: null }),
+          };
+        }
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          order: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          maybeSingle: jest.fn().mockResolvedValue({
+            data: { id: 'sub-2', status: 'canceled', cancel_at_period_end: true, current_period_end: futureDate },
+            error: null,
+          }),
+        };
       });
 
       const req = { user: { id: 'test-user-id' } };
@@ -126,15 +144,24 @@ describe('Middleware', () => {
 
     it('should reject access (403) for expired subscription', async () => {
       const pastDate = new Date(Date.now() - 86400000).toISOString();
-      jest.spyOn(supabase, 'from').mockReturnValueOnce({
-        select: jest.fn().mockReturnThis(),
-        eq: jest.fn().mockReturnThis(),
-        order: jest.fn().mockReturnThis(),
-        limit: jest.fn().mockReturnThis(),
-        maybeSingle: jest.fn().mockResolvedValue({
-          data: { id: 'sub-3', status: 'canceled', cancel_at_period_end: true, current_period_end: pastDate },
-          error: null,
-        }),
+      jest.spyOn(supabase, 'from').mockImplementation((table) => {
+        if (table === 'profiles') {
+          return {
+            select: jest.fn().mockReturnThis(),
+            eq: jest.fn().mockReturnThis(),
+            maybeSingle: jest.fn().mockResolvedValue({ data: { role: 'user' }, error: null }),
+          };
+        }
+        return {
+          select: jest.fn().mockReturnThis(),
+          eq: jest.fn().mockReturnThis(),
+          order: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          maybeSingle: jest.fn().mockResolvedValue({
+            data: { id: 'sub-3', status: 'canceled', cancel_at_period_end: true, current_period_end: pastDate },
+            error: null,
+          }),
+        };
       });
 
       const req = { user: { id: 'test-user-id' } };
@@ -146,6 +173,18 @@ describe('Middleware', () => {
       expect(res.status).toHaveBeenCalledWith(403);
       expect(next).not.toHaveBeenCalled();
       jest.restoreAllMocks();
+    });
+
+    it('should allow access (call next) for admin user without subscription', async () => {
+      const req = { user: { id: 'admin-user-id', role: 'admin' } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const next = jest.fn();
+
+      await requireSubscription(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(req.subscription).toBeDefined();
+      expect(req.subscription.is_admin_bypass).toBe(true);
     });
   });
 });

@@ -226,10 +226,11 @@ export function AuthProvider({ children }) {
 
   const isSubscribed = Boolean(
     user &&
-      subscription &&
-      (subscription.status === 'active' ||
-        subscription.status === 'trialing' ||
-        (subscription.current_period_end && new Date(subscription.current_period_end) > new Date()))
+      (profile?.role === 'admin' ||
+        (subscription &&
+          (subscription.status === 'active' ||
+            subscription.status === 'trialing' ||
+            (subscription.current_period_end && new Date(subscription.current_period_end) > new Date()))))
   );
 
   const value = {

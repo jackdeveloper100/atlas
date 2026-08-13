@@ -34,6 +34,36 @@ export const adminService = {
   },
 
   /**
+   * Create a new user account (Admin operation)
+   */
+  async createUser({ email, password, displayName, role = 'user' }) {
+    return await api.post('/admin/users', {
+      email,
+      password,
+      display_name: displayName,
+      role,
+    });
+  },
+
+  /**
+   * Update full user account details (Admin operation)
+   */
+  async updateUser(id, { displayName, role, password }) {
+    return await api.put(`/admin/users/${id}`, {
+      display_name: displayName,
+      role,
+      password,
+    });
+  },
+
+  /**
+   * Delete a user account (Admin operation)
+   */
+  async deleteUser(id) {
+    return await api.delete(`/admin/users/${id}`);
+  },
+
+  /**
    * Update user role ('user' or 'admin')
    */
   async updateUserRole(id, role) {
@@ -64,6 +94,41 @@ export const adminService = {
    */
   async toggleSnapshotPublish(year) {
     return await api.post(`/admin/snapshots/${year}/toggle-publish`);
+  },
+
+  /**
+   * Fetch snapshot regions and nations for admin editing (works for draft and published years)
+   */
+  async getSnapshotDataForAdmin(year) {
+    return await api.get(`/admin/snapshots/${year}/data`);
+  },
+
+  /**
+   * Ingest all 11 default engine snapshot JSON files into database
+   */
+  async ingestDefaultSnapshots() {
+    return await api.post('/admin/snapshots/ingest-defaults');
+  },
+
+  /**
+   * Create a new custom archive snapshot year
+   */
+  async createArchiveSnapshot({ year, is_published = false }) {
+    return await api.post('/admin/snapshots', { year, is_published });
+  },
+
+  /**
+   * Fetch dynamic region details for a given year and region ID
+   */
+  async getArchiveRegionDetails(year, regionId) {
+    return await api.get(`/admin/archive/years/${year}/regions/${regionId}`);
+  },
+
+  /**
+   * Update dynamic region details for a given year and region ID
+   */
+  async updateArchiveRegionDetails(year, regionId, payload) {
+    return await api.put(`/admin/archive/years/${year}/regions/${regionId}`, payload);
   },
 
   /**

@@ -90,6 +90,48 @@ async function getSnapshot(year) {
     return { success: false, snapshot: null, error, notFound: false };
   }
 
+  // Merge dynamic database region details overlays
+  try {
+    const { supabase } = require('./supabase.service');
+    const { data: regionOverlays } = await supabase
+      .from('archive_region_details')
+      .select('*')
+      .eq('year', year);
+
+    if (regionOverlays && regionOverlays.length > 0 && data && Array.isArray(data.regions)) {
+      const overlayMap = {};
+      regionOverlays.forEach((o) => {
+        overlayMap[o.region_id] = o;
+      });
+
+      data.regions = data.regions.map((region) => {
+        const overlay = overlayMap[region.id];
+        if (!overlay) return region;
+
+        return {
+          ...region,
+          governanceBadges: overlay.governance_badges || [],
+          riskTags: overlay.risk_tags || [],
+          gdpValue: overlay.gdp_value !== null ? overlay.gdp_value : region.gdpValue,
+          gdpChangePct: overlay.gdp_change_pct !== null ? overlay.gdp_change_pct : region.gdpChangePct,
+          gdpSparkline: overlay.gdp_sparkline || [],
+          militaryCapability: overlay.military_capability !== null ? overlay.military_capability : region.militaryCapability,
+          personnelCount: overlay.personnel_count !== null ? overlay.personnel_count : region.personnelCount,
+          militarySparkline: overlay.military_sparkline || [],
+          reservesValue: overlay.reserves_value !== null ? overlay.reserves_value : region.reservesValue,
+          reservesNote: overlay.reserves_note || '',
+          reservesSparkline: overlay.reserves_sparkline || [],
+          stabilityValue: overlay.stability_value !== null ? overlay.stability_value : region.stabilityValue,
+          stabilityTrend: overlay.stability_trend || '',
+          stabilitySparkline: overlay.stability_sparkline || [],
+          cultureBreakdown: overlay.culture_breakdown || [],
+        };
+      });
+    }
+  } catch (e) {
+    // Fallback to raw snapshot if overlay table unavailable
+  }
+
   return { success: true, snapshot: data, error: null, notFound: false };
 }
 

@@ -87,6 +87,94 @@ router.get(
 );
 
 /**
+ * POST /api/admin/users
+ * Create a new user account directly from Admin system.
+ */
+router.post(
+  '/users',
+  [
+    body('email').isEmail().withMessage('Valid email required'),
+    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+    body('display_name').optional().isString().trim(),
+    body('role').optional().isIn(['user', 'admin']).withMessage("Role must be 'user' or 'admin'"),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const adminUserId = req.user.id;
+      const { email, password, display_name, role } = req.body;
+
+      const newUser = await adminService.createUser(adminUserId, {
+        email,
+        password,
+        displayName: display_name,
+        role: role || 'user',
+      });
+
+      return sendSuccess(res, newUser, 201);
+    } catch (err) {
+      console.error('Admin createUser error:', err);
+      return sendError(res, err.message || 'Failed to create user', 400);
+    }
+  }
+);
+
+/**
+ * PUT /api/admin/users/:id
+ * Update user profile details, role, or password.
+ */
+router.put(
+  '/users/:id',
+  [
+    param('id').isUUID().withMessage('Valid user UUID required'),
+    body('display_name').optional().isString().trim(),
+    body('role').optional().isIn(['user', 'admin']).withMessage("Role must be 'user' or 'admin'"),
+    body('password').optional().isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const adminUserId = req.user.id;
+      const targetUserId = req.params.id;
+      const { display_name, role, password } = req.body;
+
+      const updatedUser = await adminService.updateUser(adminUserId, targetUserId, {
+        displayName: display_name,
+        role,
+        password,
+      });
+
+      return sendSuccess(res, updatedUser);
+    } catch (err) {
+      console.error('Admin updateUser error:', err);
+      return sendError(res, err.message || 'Failed to update user', 400);
+    }
+  }
+);
+
+/**
+ * DELETE /api/admin/users/:id
+ * Delete a user account and associated profile/subscriptions.
+ */
+router.delete(
+  '/users/:id',
+  [param('id').isUUID().withMessage('Valid user UUID required')],
+  validate,
+  async (req, res) => {
+    try {
+      const adminUserId = req.user.id;
+      const targetUserId = req.params.id;
+
+      const result = await adminService.deleteUser(adminUserId, targetUserId);
+      return sendSuccess(res, result);
+    } catch (err) {
+      console.error('Admin deleteUser error:', err);
+      return sendError(res, err.message || 'Failed to delete user', 400);
+    }
+  }
+);
+
+/**
  * PUT /api/admin/users/:id/role
  * Update user role (strictly 'user' or 'admin').
  */
@@ -183,6 +271,123 @@ router.post(
     } catch (err) {
       console.error('Admin toggleSnapshotPublish error:', err);
       return sendError(res, 'Failed to update snapshot publication status', 500);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/snapshots/:year/data
+ * Fetch snapshot regions and nations for admin editing (works for both draft and published years).
+ */
+router.get(
+  '/snapshots/:year/data',
+  [param('year').isInt({ min: 0 }).toInt()],
+  validate,
+  async (req, res) => {
+    try {
+      const { year } = req.params;
+      const data = await adminService.getSnapshotDataForAdmin(year);
+      return sendSuccess(res, data);
+    } catch (err) {
+      console.error('Admin getSnapshotData error:', err);
+      return sendError(res, 'Failed to fetch snapshot admin data', 500);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/snapshots/ingest-defaults
+ * Ingest all 11 default engine snapshot JSON files into the database.
+ */
+router.post('/snapshots/ingest-defaults', async (req, res) => {
+  try {
+    const result = await adminService.ingestDefaultSnapshots(req.user.id);
+    return sendSuccess(res, {
+      message: `Ingestion complete. ${result.published} snapshots published.`,
+      result,
+    });
+  } catch (err) {
+    console.error('Admin ingestDefaultSnapshots error:', err);
+    return sendError(res, err.message || 'Failed to ingest default snapshots', 500);
+  }
+});
+
+/**
+ * POST /api/admin/snapshots
+ * Create a new custom archive snapshot year.
+ */
+router.post(
+  '/snapshots',
+  [
+    body('year').isInt({ min: 0, max: 9999 }).toInt(),
+    body('is_published').optional().isBoolean(),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { year, is_published = false } = req.body;
+      const snapshot = await adminService.createArchiveSnapshot(req.user.id, {
+        year,
+        isPublished: is_published,
+      });
+      return sendSuccess(res, {
+        message: `Archive snapshot for Year ${year} successfully created.`,
+        snapshot,
+      });
+    } catch (err) {
+      console.error('Admin createArchiveSnapshot error:', err);
+      return sendError(res, err.message || 'Failed to create archive snapshot', 500);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/archive/years/:year/regions/:regionId
+ * Fetch dynamic region details overlay for a year and region ID.
+ */
+router.get(
+  '/archive/years/:year/regions/:regionId',
+  [
+    param('year').isInt({ min: 0 }).toInt(),
+    param('regionId').isString().notEmpty(),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { year, regionId } = req.params;
+      const details = await adminService.getArchiveRegionDetails(year, regionId);
+      return sendSuccess(res, { details });
+    } catch (err) {
+      console.error('Admin getArchiveRegionDetails error:', err);
+      return sendError(res, 'Failed to fetch region details overlay', 500);
+    }
+  }
+);
+
+/**
+ * PUT /api/admin/archive/years/:year/regions/:regionId
+ * Upsert dynamic region details overlay for a year and region ID.
+ */
+router.put(
+  '/archive/years/:year/regions/:regionId',
+  [
+    param('year').isInt({ min: 0 }).toInt(),
+    param('regionId').isString().notEmpty(),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { year, regionId } = req.params;
+      const updated = await adminService.upsertArchiveRegionDetails(
+        req.user.id,
+        year,
+        regionId,
+        req.body
+      );
+      return sendSuccess(res, { details: updated });
+    } catch (err) {
+      console.error('Admin upsertArchiveRegionDetails error:', err);
+      return sendError(res, 'Failed to update region details overlay', 500);
     }
   }
 );

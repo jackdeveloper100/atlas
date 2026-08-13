@@ -21,7 +21,10 @@ ALTER TABLE audit_log ADD CONSTRAINT audit_log_event_type_check
     'update_profile',
     'admin_role_change',
     'admin_snapshot_toggle',
-    'admin_library_toggle'
+    'admin_library_toggle',
+    'admin_user_create',
+    'admin_user_update',
+    'admin_user_delete'
   ));
 
 COMMENT ON COLUMN profiles.role IS 'User access role: user (default) or admin';

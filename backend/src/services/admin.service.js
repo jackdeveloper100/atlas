@@ -157,6 +157,137 @@ class AdminService {
   }
 
   /**
+   * Create a new user account (Admin operation)
+   */
+  async createUser(adminUserId, { email, password, displayName, role = 'user' }) {
+    if (!email || !password) {
+      throw new Error('Email and password are required to create a user account.');
+    }
+
+    if (!['user', 'admin'].includes(role)) {
+      throw new Error("Invalid role specified. Role must be 'user' or 'admin'.");
+    }
+
+    // 1. Create auth user in Supabase Auth via admin API
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email: email.trim(),
+      password: password,
+      email_confirm: true,
+      user_metadata: { display_name: displayName || '' },
+    });
+
+    if (authError) throw authError;
+
+    const newUser = authData.user;
+
+    // 2. Insert/Upsert into public.profiles
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .upsert({
+        id: newUser.id,
+        display_name: displayName || '',
+        role: role,
+        age_confirmed_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .select('id, display_name, role, age_confirmed_at, created_at')
+      .single();
+
+    if (profileError) {
+      // Cleanup auth user if profile insertion fails
+      await supabase.auth.admin.deleteUser(newUser.id).catch(() => {});
+      throw profileError;
+    }
+
+    // 3. Log audit event
+    await logAuditEvent(adminUserId, 'admin_user_create', {
+      created_user_id: newUser.id,
+      email: email.trim(),
+      role: role,
+    });
+
+    return profile;
+  }
+
+  /**
+   * Update full user details (Admin operation)
+   */
+  async updateUser(adminUserId, targetUserId, { displayName, role, password }) {
+    const updates = {};
+    if (displayName !== undefined) updates.display_name = displayName;
+    if (role !== undefined) {
+      if (!['user', 'admin'].includes(role)) {
+        throw new Error("Invalid role specified. Role must be 'user' or 'admin'.");
+      }
+      if (adminUserId === targetUserId && role !== 'admin') {
+        throw new Error('Administrators cannot revoke their own admin access.');
+      }
+      updates.role = role;
+    }
+    updates.updated_at = new Date().toISOString();
+
+    const { data: updatedProfile, error: profileError } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', targetUserId)
+      .select('id, display_name, role, updated_at')
+      .single();
+
+    if (profileError) throw profileError;
+
+    // Optional password update by admin
+    if (password && password.trim() !== '') {
+      const { error: passError } = await supabase.auth.admin.updateUserById(targetUserId, {
+        password: password,
+      });
+      if (passError) throw passError;
+    }
+
+    // Audit log
+    await logAuditEvent(adminUserId, 'admin_user_update', {
+      target_user_id: targetUserId,
+      updated_fields: Object.keys(updates),
+    });
+
+    return updatedProfile;
+  }
+
+  /**
+   * Delete a user account (Admin operation)
+   */
+  async deleteUser(adminUserId, targetUserId) {
+    if (adminUserId === targetUserId) {
+      throw new Error('Administrators cannot delete their own account from the admin system.');
+    }
+
+    // 1. Delete user subscriptions from database
+    await supabase
+      .from('subscriptions')
+      .delete()
+      .eq('user_id', targetUserId);
+
+    // 2. Delete profile from database
+    await supabase
+      .from('profiles')
+      .delete()
+      .eq('id', targetUserId);
+
+    // 3. Delete user from Supabase Auth
+    const { error: authError } = await supabase.auth.admin.deleteUser(targetUserId);
+    if (authError) {
+      console.error('Supabase Auth user delete warning:', authError);
+    }
+
+    // 4. Log audit event
+    await logAuditEvent(adminUserId, 'admin_user_delete', {
+      deleted_user_id: targetUserId,
+    });
+
+    return { success: true, deleted_user_id: targetUserId };
+  }
+
+  /**
    * Update user role (user -> admin or admin -> user)
    */
   async updateUserRole(adminUserId, targetUserId, newRole) {
@@ -263,6 +394,203 @@ class AdminService {
     });
 
     return updated;
+  }
+
+  /**
+   * Fetch snapshot regions and nations for admin editing (works for both draft and published years)
+   */
+  async getSnapshotDataForAdmin(year) {
+    const yearNum = parseInt(year, 10);
+    const storageService = require('./storage.service');
+
+    const defaultRegions = [
+      { id: 'region_01', name: 'Amber Vale', nationId: 'ashen-run', population: 75000, area: 1200 },
+      { id: 'region_02', name: 'Ashen Reach', nationId: 'ashen-run', population: 82000, area: 1500 },
+      { id: 'region_03', name: 'Verdant Basin', nationId: 'verdant-circle', population: 64000, area: 980 },
+      { id: 'region_04', name: 'Highland Ridge', nationId: 'iron-confederacy', population: 49000, area: 1100 },
+      { id: 'region_05', name: 'Eastern Sound', nationId: 'ashen-run', population: 33000, area: 650 },
+    ];
+
+    const defaultNations = [
+      { id: 'ashen-run', name: 'Ashen Run', foundedYear: 1850 },
+      { id: 'verdant-circle', name: 'Verdant Circle', foundedYear: 1872 },
+      { id: 'iron-confederacy', name: 'Iron Confederacy', foundedYear: 1888 },
+      { id: 'maritime-league', name: 'Maritime League', foundedYear: 1902 },
+    ];
+
+    try {
+      const { success, data } = await storageService.getSnapshot(yearNum);
+      if (success && data) {
+        return {
+          year: yearNum,
+          regions: data.regions?.length ? data.regions : defaultRegions,
+          nations: data.nations?.length ? data.nations : defaultNations,
+        };
+      }
+    } catch (e) {
+      // Fallback
+    }
+
+    return {
+      year: yearNum,
+      regions: defaultRegions,
+      nations: defaultNations,
+    };
+  }
+
+  /**
+   * Ingest all default engine snapshot files into database
+   */
+  async ingestDefaultSnapshots(adminUserId) {
+    const path = require('path');
+    const { ingestDirectory } = require('./ingestion.service');
+    const engineSnapshotsDir = path.resolve(__dirname, '../../../engine/data/snapshots');
+
+    const result = await ingestDirectory(engineSnapshotsDir, { verbose: false });
+
+    await logAuditEvent(adminUserId, 'admin_snapshot_toggle', {
+      action: 'ingest_all_default_snapshots',
+      published_count: result.published,
+    });
+
+    return result;
+  }
+
+  /**
+   * Create a custom year archive snapshot
+   */
+  async createArchiveSnapshot(adminUserId, { year, isPublished = false }) {
+    const yearNum = parseInt(year, 10);
+
+    const defaultRegions = [
+      { id: 'region_01', name: 'Amber Vale', nationId: 'ashen-run', population: 75000, area: 1200 },
+      { id: 'region_02', name: 'Ashen Reach', nationId: 'ashen-run', population: 82000, area: 1500 },
+      { id: 'region_03', name: 'Verdant Basin', nationId: 'verdant-circle', population: 64000, area: 980 },
+      { id: 'region_04', name: 'Highland Ridge', nationId: 'iron-confederacy', population: 49000, area: 1100 },
+      { id: 'region_05', name: 'Eastern Sound', nationId: 'ashen-run', population: 33000, area: 650 },
+    ];
+
+    const defaultNations = [
+      { id: 'ashen-run', name: 'Ashen Run', foundedYear: 1850 },
+      { id: 'verdant-circle', name: 'Verdant Circle', foundedYear: 1872 },
+      { id: 'iron-confederacy', name: 'Iron Confederacy', foundedYear: 1888 },
+      { id: 'maritime-league', name: 'Maritime League', foundedYear: 1902 },
+    ];
+
+    // Check if snapshot year already exists
+    const { data: existing } = await supabase
+      .from('archive_years')
+      .select('year')
+      .eq('year', yearNum)
+      .maybeSingle();
+
+    if (existing) {
+      throw new Error(`Snapshot record for Year ${yearNum} already exists.`);
+    }
+
+    const storageKey = `snapshots/year-${String(yearNum).padStart(4, '0')}.json`;
+    const snapshotContent = {
+      schemaVersion: '1.0',
+      world: {
+        year: yearNum,
+        population: 303000,
+        nationsCount: 4,
+        regionsCount: 5,
+      },
+      nations: defaultNations,
+      regions: defaultRegions,
+      leaders: [],
+      politicalStates: [],
+      events: [],
+    };
+
+    const storageService = require('./storage.service');
+    await storageService.uploadSnapshot(yearNum, snapshotContent);
+
+    const { data: record, error } = await supabase
+      .from('archive_years')
+      .insert({
+        year: yearNum,
+        snapshot_key: storageKey,
+        schema_version: '1.0',
+        sha256_checksum: 'manual-admin-create',
+        size_bytes: JSON.stringify(snapshotContent).length,
+        is_published: Boolean(isPublished),
+        published_at: isPublished ? new Date().toISOString() : null,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    await logAuditEvent(adminUserId, 'admin_snapshot_toggle', {
+      action: 'create_archive_snapshot',
+      year: yearNum,
+    });
+
+    return record;
+  }
+
+  /**
+   * Get dynamic region details overlay for a year and region_id
+   */
+  async getArchiveRegionDetails(year, regionId) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_region_details')
+      .select('*')
+      .eq('year', yearNum)
+      .eq('region_id', regionId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data || null;
+  }
+
+  /**
+   * Upsert dynamic region details overlay for a year and region_id
+   */
+  async upsertArchiveRegionDetails(adminUserId, year, regionId, payload) {
+    const yearNum = parseInt(year, 10);
+
+    const record = {
+      year: yearNum,
+      region_id: regionId,
+      nation_id: payload.nation_id || null,
+      region_name: payload.region_name || '',
+      governance_badges: payload.governance_badges || [],
+      risk_tags: payload.risk_tags || [],
+      gdp_value: payload.gdp_value !== undefined ? payload.gdp_value : null,
+      gdp_change_pct: payload.gdp_change_pct !== undefined ? payload.gdp_change_pct : null,
+      gdp_sparkline: payload.gdp_sparkline || [],
+      military_capability: payload.military_capability !== undefined ? payload.military_capability : null,
+      personnel_count: payload.personnel_count !== undefined ? payload.personnel_count : null,
+      military_sparkline: payload.military_sparkline || [],
+      reserves_value: payload.reserves_value !== undefined ? payload.reserves_value : null,
+      reserves_note: payload.reserves_note || '',
+      reserves_sparkline: payload.reserves_sparkline || [],
+      stability_value: payload.stability_value !== undefined ? payload.stability_value : null,
+      stability_trend: payload.stability_trend || '',
+      stability_sparkline: payload.stability_sparkline || [],
+      culture_breakdown: payload.culture_breakdown || [],
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('archive_region_details')
+      .upsert(record, { onConflict: 'year,region_id' })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // Log audit event
+    await logAuditEvent(adminUserId, 'admin_archive_region_update', {
+      year: yearNum,
+      region_id: regionId,
+    });
+
+    return data;
   }
 
   /**

@@ -9,6 +9,7 @@ import RegionsTable from '../../components/archive/RegionsTable';
 import LeadersTable from '../../components/archive/LeadersTable';
 import EventsFeed from '../../components/archive/EventsFeed';
 import EntityDetailModal from '../../components/archive/EntityDetailModal';
+import InteractiveWorldMap from '../../components/archive/InteractiveWorldMap';
 import Tabs from '../../components/ui/Tabs';
 import Skeleton, { TableSkeleton } from '../../components/ui/Skeleton';
 import ErrorState from '../../components/ui/ErrorState';
@@ -121,31 +122,13 @@ export function ArchivePage() {
         />
       </div>
 
-      {/* Map Backdrop Container matching Figma sage green canvas */}
-      <div className="bg-[#b8c5a8] rounded-card border border-rule p-6 min-h-[300px] relative flex flex-col justify-between overflow-hidden shadow-inner">
-        <div className="flex items-center justify-between text-xs font-mono font-bold text-ink/70 z-10">
-          <span>MAP CANVAS · REGION GEOGRAPHY NOT YET AVAILABLE</span>
-          <span>YEAR {selectedYear} • {events.length} EVENTS RECORDED</span>
-        </div>
-
-        {/* Decorative Map SVG Outlines */}
-        <div className="absolute inset-0 opacity-20 pointer-events-none flex items-center justify-center">
-          <svg className="w-full h-full text-ink" viewBox="0 0 800 400" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M150 100 Q 250 50, 350 120 T 550 100 T 700 200 Q 600 320, 450 280 T 200 300 Z" />
-            <path d="M100 250 Q 180 200, 280 260 T 400 350 Z" />
-          </svg>
-        </div>
-
-        {/* Year Summary Metric Display */}
-        {!isLoadingYears && (
-          <div className="z-10 mt-auto">
-            <YearDisplay
-              selectedYear={selectedYear}
-              snapshot={currentSnapshot}
-            />
-          </div>
-        )}
-      </div>
+      {/* Interactive World Map Vector Canvas matching Figma */}
+      <InteractiveWorldMap
+        regions={regions}
+        nations={nations}
+        selectedRegionId={selectedEntity?.id}
+        onSelectRegion={(reg) => handleOpenDetail(reg, 'region')}
+      />
 
       {/* Main Content Area */}
       {error ? (

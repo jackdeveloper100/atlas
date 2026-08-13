@@ -20,6 +20,27 @@ async function requireSubscription(req, res, next) {
       return sendError(res, 'Unauthenticated', 401);
     }
 
+    // First check if user is an admin (admins bypass paid subscription requirements)
+    if (req.user.role === 'admin' || req.userProfile?.role === 'admin') {
+      req.subscription = { status: 'active', is_admin_bypass: true };
+      return next();
+    }
+
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', req.user.id)
+        .maybeSingle();
+
+      if (profile?.role === 'admin') {
+        req.subscription = { status: 'active', is_admin_bypass: true };
+        return next();
+      }
+    } catch (e) {
+      // Ignore lookup failure if profile query is unmocked or unavailable
+    }
+
     // Query database for latest user subscription (server-side validation)
     const { data, error } = await supabase
       .from('subscriptions')
