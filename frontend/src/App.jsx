@@ -38,6 +38,7 @@ import AdminSubscriptionsPage from './pages/admin/AdminSubscriptionsPage';
 import AdminArchivePage from './pages/admin/AdminArchivePage';
 import AdminLibraryPage from './pages/admin/AdminLibraryPage';
 import AdminAuditLogPage from './pages/admin/AdminAuditLogPage';
+import AdminProfilePage from './pages/admin/AdminProfilePage';
 
 function App() {
   return (
@@ -98,6 +99,7 @@ function App() {
         <Route path="/admin/archive" element={<AdminArchivePage />} />
         <Route path="/admin/library" element={<AdminLibraryPage />} />
         <Route path="/admin/audit-logs" element={<AdminAuditLogPage />} />
+        <Route path="/admin/profile" element={<AdminProfilePage />} />
       </Route>
 
       {/* Fallback Catch-all */}

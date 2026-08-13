@@ -2,11 +2,11 @@
  * AdminLayout.jsx
  *
  * Layout shell for all ATLAS Admin pages (/admin/*).
- * Includes Admin sidebar, topbar status, and content area.
+ * Includes Admin sidebar, topbar status, profile links, logout, and content area.
  */
 
 import React from 'react';
-import { NavLink, Outlet, Link } from 'react-router-dom';
+import { NavLink, Outlet, Link, useNavigate } from 'react-router-dom';
 import {
   ShieldCheck,
   LayoutDashboard,
@@ -16,11 +16,19 @@ import {
   Radio,
   History,
   ArrowLeft,
+  User,
+  LogOut,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
 export default function AdminLayout() {
-  const { profile, user } = useAuth();
+  const { profile, user, signOut } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/login');
+  };
 
   const navItems = [
     { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -29,6 +37,7 @@ export default function AdminLayout() {
     { to: '/admin/archive', label: 'Archive Snapshots', icon: FileClock },
     { to: '/admin/library', label: 'Audio Library', icon: Radio },
     { to: '/admin/audit-logs', label: 'Audit Logs', icon: History },
+    { to: '/admin/profile', label: 'Admin Profile', icon: User },
   ];
 
   return (
@@ -77,7 +86,7 @@ export default function AdminLayout() {
         </nav>
 
         {/* Sidebar Footer */}
-        <div className="p-4 border-t border-rule bg-ground/50">
+        <div className="p-4 border-t border-rule bg-ground/50 space-y-2">
           <Link
             to="/archive"
             className="flex items-center justify-center space-x-2 w-full px-4 py-2.5 rounded-lg border border-rule text-sm font-medium text-ink hover:bg-black/5 transition-colors"
@@ -85,6 +94,15 @@ export default function AdminLayout() {
             <ArrowLeft className="w-4 h-4" />
             <span>Return to App</span>
           </Link>
+
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="flex items-center justify-center space-x-2 w-full px-4 py-2.5 rounded-lg border border-red-200 text-sm font-medium text-red-700 bg-red-50/50 hover:bg-red-100/60 transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </aside>
 
@@ -100,13 +118,29 @@ export default function AdminLayout() {
           </div>
 
           <div className="flex items-center space-x-4">
-            <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/10 text-amber-700 border border-amber-500/30">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>ADMIN</span>
-            </span>
-            <span className="text-sm font-medium text-ink hidden sm:inline">
-              {profile?.display_name || user?.email}
-            </span>
+            <Link
+              to="/admin/profile"
+              className="flex items-center space-x-2 p-1.5 rounded-lg hover:bg-black/5 transition-colors"
+              title="View Admin Profile Settings"
+            >
+              <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/10 text-amber-700 border border-amber-500/30">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>ADMIN</span>
+              </span>
+              <span className="text-sm font-medium text-ink hidden sm:inline">
+                {profile?.display_name || user?.email}
+              </span>
+            </Link>
+
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="p-2 text-ink/70 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-semibold border border-rule"
+              title="Sign Out of ATLAS"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
           </div>
         </header>
 
