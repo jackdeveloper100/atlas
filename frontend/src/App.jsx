@@ -28,6 +28,17 @@ import AccountPage from './pages/AccountPage';
 import AccountProfilePage from './pages/AccountProfilePage';
 import AccountSecurityPage from './pages/AccountSecurityPage';
 
+import AdminRoute from './components/AdminRoute';
+import AdminLayout from './components/layouts/AdminLayout';
+
+import AdminDashboardPage from './pages/admin/AdminDashboardPage';
+import AdminUsersPage from './pages/admin/AdminUsersPage';
+import AdminUserDetailPage from './pages/admin/AdminUserDetailPage';
+import AdminSubscriptionsPage from './pages/admin/AdminSubscriptionsPage';
+import AdminArchivePage from './pages/admin/AdminArchivePage';
+import AdminLibraryPage from './pages/admin/AdminLibraryPage';
+import AdminAuditLogPage from './pages/admin/AdminAuditLogPage';
+
 function App() {
   return (
     <Routes>
@@ -70,6 +81,23 @@ function App() {
         <Route path="/account" element={<AccountPage />} />
         <Route path="/account/profile" element={<AccountProfilePage />} />
         <Route path="/account/security" element={<AccountSecurityPage />} />
+      </Route>
+
+      {/* Admin System Routes */}
+      <Route
+        element={
+          <AdminRoute>
+            <AdminLayout />
+          </AdminRoute>
+        }
+      >
+        <Route path="/admin" element={<AdminDashboardPage />} />
+        <Route path="/admin/users" element={<AdminUsersPage />} />
+        <Route path="/admin/users/:id" element={<AdminUserDetailPage />} />
+        <Route path="/admin/subscriptions" element={<AdminSubscriptionsPage />} />
+        <Route path="/admin/archive" element={<AdminArchivePage />} />
+        <Route path="/admin/library" element={<AdminLibraryPage />} />
+        <Route path="/admin/audit-logs" element={<AdminAuditLogPage />} />
       </Route>
 
       {/* Fallback Catch-all */}

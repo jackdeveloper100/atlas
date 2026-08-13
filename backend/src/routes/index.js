@@ -13,6 +13,7 @@ const authRoutes = require('./auth.routes');
 const subscriptionRoutes = require('./subscription.routes');
 const archiveRoutes = require('./archive.routes');  // Phase 3
 const libraryRoutes = require('./library.routes');  // Phase 4
+const adminRoutes = require('./admin.routes');      // Phase 7
 
 const router = express.Router();
 
@@ -22,6 +23,7 @@ router.use('/auth', authRoutes);
 router.use('/subscriptions', subscriptionRoutes);
 router.use('/archive', archiveRoutes);  // Phase 3
 router.use('/library', libraryRoutes);  // Phase 4
+router.use('/admin', adminRoutes);      // Phase 7
 
 // 404 for any unmatched /api/* route
 router.use((req, res) => {

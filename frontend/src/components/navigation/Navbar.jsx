@@ -6,6 +6,7 @@ import {
   User,
   LogOut,
   Menu,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import MobileNav from './MobileNav';
@@ -15,7 +16,7 @@ import MobileNav from './MobileNav';
  * Global header navigation bar for ATLAS.
  */
 export function Navbar() {
-  const { user, isSubscriber, signOut } = useAuth();
+  const { user, profile, isSubscriber, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -137,9 +138,24 @@ export function Navbar() {
                       </p>
 
                       <p className="text-[10px] font-mono text-ink-muted uppercase tracking-wider mt-0.5">
-                        {isSubscriber ? 'Pro Account' : 'Free Account'}
+                        {profile?.role === 'admin'
+                          ? 'Admin Account'
+                          : isSubscriber
+                          ? 'Pro Account'
+                          : 'Free Account'}
                       </p>
                     </div>
+
+                    {profile?.role === 'admin' && (
+                      <Link
+                        to="/admin"
+                        onClick={() => setIsUserMenuOpen(false)}
+                        className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-500/10 hover:bg-amber-500/20 transition-colors border-b border-rule"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-amber-700" />
+                        <span>Admin System</span>
+                      </Link>
+                    )}
 
                     {/* Account Settings */}
                     <Link

@@ -112,7 +112,10 @@ router.post(
 router.post(
   '/login',
   [
-    body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+    body('email')
+      .isEmail()
+      .normalizeEmail({ gmail_remove_subaddress: false, gmail_remove_dots: false })
+      .withMessage('Valid email required'),
     body('password').notEmpty().withMessage('Password required'),
   ],
   validate,
@@ -196,6 +199,7 @@ router.get('/me', authenticate, async (req, res) => {
         id: req.user.id,
         email: req.user.email,
         display_name: profile.display_name,
+        role: profile.role || 'user',
         created_at: profile.created_at,
       },
       subscription: subscription || null,
@@ -286,7 +290,12 @@ router.delete('/delete-account', authenticate, async (req, res) => {
  */
 router.post(
   '/forgot-password',
-  [body('email').isEmail().normalizeEmail().withMessage('Valid email required')],
+  [
+    body('email')
+      .isEmail()
+      .normalizeEmail({ gmail_remove_subaddress: false, gmail_remove_dots: false })
+      .withMessage('Valid email required'),
+  ],
   validate,
   async (req, res) => {
     try {

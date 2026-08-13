@@ -63,6 +63,15 @@ client.interceptors.response.use(
 
     const statusCode = error.response?.status || 500;
 
+    // Trigger auto-logout event on HTTP 401 Unauthorized
+    if (statusCode === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('auth:unauthorized', {
+          detail: { message, statusCode },
+        })
+      );
+    }
+
     // Return a rejected promise with structured error
     return Promise.reject({
       message,

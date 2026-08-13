@@ -4,31 +4,55 @@
  * User login with email + password
  */
 
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
 
   const { signIn } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    let reason = searchParams.get('reason');
+    if (!reason && typeof window !== 'undefined') {
+      try {
+        reason = sessionStorage.getItem('atlas_logout_reason');
+        sessionStorage.removeItem('atlas_logout_reason');
+      } catch (e) {}
+    }
+
+    if (reason === 'inactivity') {
+      setNotice('Your session expired due to inactivity. Please sign in again.');
+    } else if (reason === 'unauthorized') {
+      setNotice('Your session has expired. Please sign in to continue.');
+    } else if (reason === 'session_expired') {
+      setNotice('Your session is no longer valid. Please sign in again.');
+    }
+  }, [searchParams]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    const { error: signInError } = await signIn(email, password);
+    const { error: signInError, profile: userProfile } = await signIn(email, password);
 
     if (signInError) {
       setError(signInError);
       setLoading(false);
     } else {
-      navigate('/account');
+      if (userProfile?.role === 'admin') {
+        navigate('/admin');
+      } else {
+        navigate('/account');
+      }
     }
   }
 
@@ -38,6 +62,12 @@ export default function LoginPage() {
         <h1 className="text-3xl font-display font-bold text-ink mb-6">
           Sign In
         </h1>
+
+        {notice && (
+          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-800 text-sm">
+            {notice}
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">

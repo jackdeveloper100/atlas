@@ -7,9 +7,10 @@
  * All subscription access control happens server-side.
  */
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase } from '../services/supabase';
 import api from '../api/client';
+import useSessionTimeout from '../hooks/useSessionTimeout';
 
 const AuthContext = createContext({});
 
@@ -28,7 +29,43 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
 
+  // Sign out
+  const signOut = useCallback(async (reason = null) => {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      // Ignore signout errors
+    }
+    setUser(null);
+    setProfile(null);
+    setSession(null);
+    setSubscription(null);
+    if (reason && typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('atlas_logout_reason', reason);
+      } catch (e) {}
+    }
+  }, []);
+
+  const handleInactivityTimeout = useCallback(() => {
+    signOut('inactivity');
+  }, [signOut]);
+
+  useSessionTimeout({
+    isAuthenticated: Boolean(user),
+    onTimeout: handleInactivityTimeout,
+  });
+
   useEffect(() => {
+    // Listen for HTTP 401 unauthorized events from API client
+    const handleUnauthorized = () => {
+      signOut('unauthorized');
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('auth:unauthorized', handleUnauthorized);
+    }
+
     // supabase-js fires onAuthStateChange immediately with the current session
     // on subscribe (INITIAL_SESSION), so a separate getSession() call here would
     // just trigger a second, redundant GET /api/auth/me on every mount.
@@ -46,8 +83,13 @@ export function AuthProvider({ children }) {
       }
     });
 
-    return () => authSubscription.unsubscribe();
-  }, []);
+    return () => {
+      authSubscription.unsubscribe();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('auth:unauthorized', handleUnauthorized);
+      }
+    };
+  }, [signOut]);
 
   // Fetch user profile and subscription from backend
   async function fetchUserProfile() {
@@ -56,12 +98,14 @@ export function AuthProvider({ children }) {
       if (response.success && response.data) {
         setProfile(response.data.user);
         setSubscription(response.data.subscription);
+        return response.data.user;
       }
     } catch (error) {
       console.error('Failed to fetch user profile:', error);
     } finally {
       setLoading(false);
     }
+    return null;
   }
 
   // Sign up with email + password
@@ -83,6 +127,9 @@ export function AuthProvider({ children }) {
   // Sign in with email + password
   async function signIn(email, password) {
     try {
+      // Clear any stale previous session before setting new session
+      await supabase.auth.signOut().catch(() => {});
+
       const envelope = await api.post('/auth/login', {
         email,
         password,
@@ -98,9 +145,9 @@ export function AuthProvider({ children }) {
 
         setSession(session);
         setUser(session.user);
-        await fetchUserProfile();
+        const userProfile = await fetchUserProfile();
 
-        return { data: envelope, error: null };
+        return { data: envelope, profile: userProfile, error: null };
       }
 
       return { data: null, error: 'Login failed' };
@@ -159,15 +206,6 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // Sign out
-  async function signOut() {
-    await supabase.auth.signOut();
-    setUser(null);
-    setProfile(null);
-    setSession(null);
-    setSubscription(null);
-  }
-
   // Delete account
   async function deleteAccount() {
     try {
@@ -216,3 +254,4 @@ export function AuthProvider({ children }) {
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
+
