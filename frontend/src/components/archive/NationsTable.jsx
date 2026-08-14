@@ -14,28 +14,29 @@ export function NationsTable({ nations = [], leaders = [], politicalStates = [],
   const [sortField, setSortField] = useState('name');
   const [sortAsc, setSortAsc] = useState(true);
 
-  // Map leader IDs to leader objects
   const leaderMap = useMemo(() => {
     const map = {};
-    leaders.forEach((l) => {
+    (leaders || []).forEach((l) => {
       map[l.id] = l;
       if (l.nationId) map[l.nationId] = l;
     });
     return map;
   }, [leaders]);
 
-  // Government type lives on politicalStates (one per nation), not on the nation itself
   const politicalStateMap = useMemo(() => {
     const map = {};
-    politicalStates.forEach((p) => {
+    (politicalStates || []).forEach((p) => {
       map[p.nationId] = p;
     });
     return map;
   }, [politicalStates]);
 
   const filteredNations = useMemo(() => {
-    return nations
-      .map((n) => ({ ...n, governmentType: politicalStateMap[n.id]?.governmentType }))
+    return (nations || [])
+      .map((n) => ({
+        ...n,
+        governmentType: n.governmentType || politicalStateMap[n.id]?.governmentType,
+      }))
       .filter((n) => n.name?.toLowerCase().includes(searchTerm.toLowerCase()))
       .sort((a, b) => {
         let valA = a[sortField] || '';
@@ -109,12 +110,12 @@ export function NationsTable({ nations = [], leaders = [], politicalStates = [],
           </TableHeader>
           <tbody>
             {filteredNations.map((nation) => {
-              const leader = leaderMap[nation.leaderId] || leaderMap[nation.id];
+              const leader = leaderMap[nation.headOfStateId] || leaderMap[nation.id];
               return (
                 <TableRow
                   key={nation.id}
                   onClick={() => onSelectNation && onSelectNation(nation)}
-                  className="group hover:bg-ground"
+                  className="group hover:bg-ground cursor-pointer"
                 >
                   <TableCell className="font-medium text-ink font-serif text-base group-hover:text-accent transition-colors">
                     <div className="flex items-center gap-2">

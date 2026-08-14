@@ -3,24 +3,15 @@
 /**
  * archive.service.js
  *
- * Business logic layer for the Archive domain.
- *
- * Sits between routes (archive.routes.js) and:
- *   - archiveRepository (database access)
- *   - storageService (snapshot JSON from Supabase Storage)
- *
- * Authentication and subscription checks happen in route middleware,
- * not here — this service trusts that callers are already authorized.
+ * Business logic layer for public Archive reads.
+ * Relational model (Migration 006).
  */
 
 const archiveRepository = require('../repositories/archive.repository');
-const storageService = require('./storage.service');
 
 /**
  * Get list of all published years with metadata.
  * Used by GET /api/archive/years
- *
- * @returns {Promise<{ success: boolean, years: object[], error: string|null }>}
  */
 async function getPublishedYears() {
   const { data, error } = await archiveRepository.listPublishedYears();
@@ -29,180 +20,218 @@ async function getPublishedYears() {
     return { success: false, years: [], error };
   }
 
-  return { success: true, years: data || [], error: null };
+  const years = (data || []).map(y => ({
+    year: y.year,
+    title: y.title || `Year ${y.year}`,
+    subtitle: y.subtitle || null,
+    description: y.description || null,
+    displayOrder: y.display_order || 0,
+    isPublished: y.is_published,
+    publishedAt: y.published_at,
+    createdAt: y.created_at,
+  }));
+
+  return { success: true, years, error: null };
 }
 
 /**
- * Get metadata for a single archive year.
- * Used by GET /api/archive/years/:year
- *
- * @param {number} year
- * @returns {Promise<{ success: boolean, year: object|null, error: string|null, notFound: boolean }>}
+ * Fetch the complete composed relational archive year.
+ * Used by GET /api/archive/:year
  */
-async function getYearMetadata(year) {
-  const { data, error } = await archiveRepository.findYear(year);
-
-  if (error) {
-    return { success: false, year: null, error, notFound: false };
-  }
-
-  if (!data) {
-    return { success: false, year: null, error: null, notFound: true };
-  }
-
-  if (!data.is_published) {
-    return { success: false, year: null, error: null, notFound: true };
-  }
-
-  return { success: true, year: data, error: null, notFound: false };
-}
-
-/**
- * Fetch a complete snapshot JSON for a given year.
- * Used by GET /api/archive/snapshot/:year
- *
- * - Verifies year is published in archive_years
- * - Fetches snapshot JSON from private Supabase Storage
- * - Returns parsed JSON with appropriate cache headers info
- *
- * @param {number} year
- * @returns {Promise<{ success: boolean, snapshot: object|null, error: string|null, notFound: boolean }>}
- */
-async function getSnapshot(year) {
-  // First check that this year is published
+async function getYear(year, allowDraft = false) {
   const { data: yearRecord, error: findError } = await archiveRepository.findYear(year);
 
   if (findError) {
-    return { success: false, snapshot: null, error: findError, notFound: false };
+    return { success: false, data: null, error: findError, notFound: false };
   }
 
-  if (!yearRecord || !yearRecord.is_published) {
-    return { success: false, snapshot: null, error: null, notFound: true };
+  if (!yearRecord) {
+    return { success: false, data: null, error: null, notFound: true };
   }
 
-  // Fetch from storage
-  const { success, data, error } = await storageService.getSnapshot(year);
+  if (!allowDraft && !yearRecord.is_published && yearRecord.status !== 'published') {
+    return { success: false, data: null, error: null, notFound: true };
+  }
 
-  if (!success) {
-    if (error === 'NOT_FOUND') {
-      return { success: false, snapshot: null, error: null, notFound: true };
+  // Parallel fetch of relational components
+  const [
+    nationsRes,
+    regionsRes,
+    leadersRes,
+    eventsRes,
+    tabsRes,
+    detailsRes,
+    metricsRes,
+  ] = await Promise.all([
+    archiveRepository.findNationsForYear(year),
+    archiveRepository.findRegionsForYear(year),
+    archiveRepository.findLeadersForYear(year),
+    archiveRepository.findEventsForYear(year),
+    archiveRepository.findTabsForYear(year),
+    archiveRepository.findEntityDetailsForYear(year),
+    archiveRepository.findMetricsForYear(year),
+  ]);
+
+  if (nationsRes.error) return { success: false, data: null, error: nationsRes.error, notFound: false };
+  if (regionsRes.error) return { success: false, data: null, error: regionsRes.error, notFound: false };
+  if (leadersRes.error) return { success: false, data: null, error: leadersRes.error, notFound: false };
+  if (eventsRes.error) return { success: false, data: null, error: eventsRes.error, notFound: false };
+  if (tabsRes.error) return { success: false, data: null, error: tabsRes.error, notFound: false };
+
+  // Map nations
+  const nations = (nationsRes.data || []).map(n => ({
+    id: n.id,
+    nationKey: n.nation_key,
+    name: n.name,
+    shortName: n.short_name,
+    description: n.description,
+    color: n.color,
+    flagUrl: n.flag_url,
+    population: n.population !== null ? Number(n.population) : 0,
+    governmentType: n.government_type,
+    capitalRegionId: n.capital_region_id,
+    foundedYear: n.founded_year,
+    headOfStateId: n.head_of_state_id,
+    centralizedPower: n.centralized_power !== null ? Number(n.centralized_power) : null,
+    stability: n.stability !== null ? Number(n.stability) : null,
+  }));
+
+  // Map regions
+  const regions = (regionsRes.data || []).map(r => ({
+    id: r.id,
+    regionKey: r.region_key,
+    name: r.name,
+    shortName: r.short_name,
+    description: r.description,
+    nationId: r.nation_id,
+    population: r.population !== null ? Number(r.population) : 0,
+    area: r.area !== null ? Number(r.area) : 0,
+    urbanization: r.urbanization !== null ? Number(r.urbanization) : 0,
+    mapPath: r.map_path,
+    mapLabelX: r.map_label_x !== null ? Number(r.map_label_x) : null,
+    mapLabelY: r.map_label_y !== null ? Number(r.map_label_y) : null,
+    mapColor: r.map_color,
+    isClaimed: r.is_claimed,
+  }));
+
+  // Map leaders
+  const leaders = (leadersRes.data || []).map(l => ({
+    id: l.id,
+    nationId: l.nation_id,
+    name: l.name,
+    title: l.title,
+    birthYear: l.birth_year,
+    deathYear: l.death_year,
+    ageOverride: l.age_override,
+    legitimacy: l.legitimacy !== null ? Number(l.legitimacy) : null,
+    influence: l.influence !== null ? Number(l.influence) : null,
+    portraitUrl: l.portrait_url,
+    biography: l.biography,
+  }));
+
+  // Map events
+  const events = (eventsRes.data || []).map(e => ({
+    id: e.id,
+    title: e.title,
+    description: e.description,
+    eventType: e.event_type,
+    badgeLabel: e.badge_label,
+    badgeColor: e.badge_color,
+    quarter: e.quarter,
+    importance: e.importance !== null ? Number(e.importance) : 1.0,
+    nationIds: e.nation_ids || [],
+    regionIds: e.region_ids || [],
+  }));
+
+  // Map tabs
+  const tabs = (tabsRes.data || []).map(t => ({
+    id: t.id,
+    tabKey: t.tab_key,
+    label: t.label,
+    icon: t.icon,
+    description: t.description,
+    displayOrder: t.display_order,
+  }));
+
+  // Tab UUID -> tabKey lookup
+  const tabKeyMap = {};
+  for (const t of tabs) {
+    tabKeyMap[t.id] = t.tabKey;
+  }
+
+  // Compose entities object
+  // Key format: "region:<id>", "nation:<id>", "leader:<id>"
+  const entities = {};
+
+  const detailsList = detailsRes.data || [];
+  for (const d of detailsList) {
+    let key = null;
+    if (d.region_id) key = `region:${d.region_id}`;
+    else if (d.nation_id) key = `nation:${d.nation_id}`;
+    else if (d.leader_id) key = `leader:${d.leader_id}`;
+
+    if (key) {
+      if (!entities[key]) entities[key] = { governanceBadges: [], riskTags: [], cultureBreakdown: [], metrics: {} };
+      entities[key].governanceBadges = d.governance_badges || [];
+      entities[key].riskTags = d.risk_tags || [];
+      entities[key].cultureBreakdown = d.culture_breakdown || [];
     }
-    return { success: false, snapshot: null, error, notFound: false };
   }
 
-  // Merge dynamic database region details overlays
-  try {
-    const { supabase } = require('./supabase.service');
-    const { data: regionOverlays } = await supabase
-      .from('archive_region_details')
-      .select('*')
-      .eq('year', year);
+  const metricsList = metricsRes.data || [];
+  for (const m of metricsList) {
+    let entityKey = null;
+    if (m.region_id) entityKey = `region:${m.region_id}`;
+    else if (m.nation_id) entityKey = `nation:${m.nation_id}`;
+    else if (m.leader_id) entityKey = `leader:${m.leader_id}`;
 
-    if (regionOverlays && regionOverlays.length > 0 && data && Array.isArray(data.regions)) {
-      const overlayMap = {};
-      regionOverlays.forEach((o) => {
-        overlayMap[o.region_id] = o;
-      });
+    const tabKey = tabKeyMap[m.tab_id] || 'overview';
 
-      data.regions = data.regions.map((region) => {
-        const overlay = overlayMap[region.id];
-        if (!overlay) return region;
+    if (entityKey) {
+      if (!entities[entityKey]) entities[entityKey] = { governanceBadges: [], riskTags: [], cultureBreakdown: [], metrics: {} };
+      if (!entities[entityKey].metrics[tabKey]) entities[entityKey].metrics[tabKey] = [];
 
-        return {
-          ...region,
-          governanceBadges: overlay.governance_badges || [],
-          riskTags: overlay.risk_tags || [],
-          gdpValue: overlay.gdp_value !== null ? overlay.gdp_value : region.gdpValue,
-          gdpChangePct: overlay.gdp_change_pct !== null ? overlay.gdp_change_pct : region.gdpChangePct,
-          gdpSparkline: overlay.gdp_sparkline || [],
-          militaryCapability: overlay.military_capability !== null ? overlay.military_capability : region.militaryCapability,
-          personnelCount: overlay.personnel_count !== null ? overlay.personnel_count : region.personnelCount,
-          militarySparkline: overlay.military_sparkline || [],
-          reservesValue: overlay.reserves_value !== null ? overlay.reserves_value : region.reservesValue,
-          reservesNote: overlay.reserves_note || '',
-          reservesSparkline: overlay.reserves_sparkline || [],
-          stabilityValue: overlay.stability_value !== null ? overlay.stability_value : region.stabilityValue,
-          stabilityTrend: overlay.stability_trend || '',
-          stabilitySparkline: overlay.stability_sparkline || [],
-          cultureBreakdown: overlay.culture_breakdown || [],
-        };
+      entities[entityKey].metrics[tabKey].push({
+        id: m.id,
+        metricKey: m.metric_key,
+        label: m.label,
+        value: m.value,
+        numericValue: m.numeric_value !== null ? Number(m.numeric_value) : null,
+        unit: m.unit,
+        prefix: m.prefix,
+        suffix: m.suffix,
+        description: m.description,
+        trendValue: m.trend_value !== null ? Number(m.trend_value) : null,
+        trendType: m.trend_type,
+        displayType: m.display_type,
+        icon: m.icon,
+        series: m.series || [],
       });
     }
-  } catch (e) {
-    // Fallback to raw snapshot if overlay table unavailable
   }
 
-  return { success: true, snapshot: data, error: null, notFound: false };
-}
+  const payload = {
+    year: {
+      year: yearRecord.year,
+      title: yearRecord.title || `Year ${yearRecord.year}`,
+      subtitle: yearRecord.subtitle || null,
+      description: yearRecord.description || null,
+      status: yearRecord.status || (yearRecord.is_published ? 'published' : 'draft'),
+      isPublished: yearRecord.is_published,
+      publishedAt: yearRecord.published_at,
+    },
+    nations,
+    regions,
+    leaders,
+    events,
+    tabs,
+    entities,
+  };
 
-/**
- * Get nations index for a specific published year.
- * Used by GET /api/archive/years/:year/nations
- *
- * @param {number} year
- * @returns {Promise<{ success: boolean, nations: object[], error: string|null, notFound: boolean }>}
- */
-async function getNationsForYear(year) {
-  // Verify year is published
-  const { data: yearRecord, error: findError } = await archiveRepository.findYear(year);
-
-  if (findError) {
-    return { success: false, nations: [], error: findError, notFound: false };
-  }
-
-  if (!yearRecord || !yearRecord.is_published) {
-    return { success: false, nations: [], error: null, notFound: true };
-  }
-
-  const { data, error } = await archiveRepository.findNationsForYear(year);
-
-  if (error) {
-    return { success: false, nations: [], error, notFound: false };
-  }
-
-  return { success: true, nations: data || [], error: null, notFound: false };
-}
-
-/**
- * Get historical events for a year with optional filters.
- * Used by GET /api/archive/years/:year/events
- *
- * @param {number} year
- * @param {object} filters
- * @param {string} [filters.event_type]
- * @param {string} [filters.nation_id]
- * @param {number} [filters.page]
- * @param {number} [filters.per_page]
- * @returns {Promise<{ success: boolean, events: object[], total: number, error: string|null, notFound: boolean }>}
- */
-async function getEventsForYear(year, filters = {}) {
-  // Verify year is published
-  const { data: yearRecord, error: findError } = await archiveRepository.findYear(year);
-
-  if (findError) {
-    return { success: false, events: [], total: 0, error: findError, notFound: false };
-  }
-
-  if (!yearRecord || !yearRecord.is_published) {
-    return { success: false, events: [], total: 0, error: null, notFound: true };
-  }
-
-  const { data, total, error } = await archiveRepository.findEvents({
-    year,
-    ...filters,
-  });
-
-  if (error) {
-    return { success: false, events: [], total: 0, error, notFound: false };
-  }
-
-  return { success: true, events: data || [], total: total || 0, error: null, notFound: false };
+  return { success: true, data: payload, error: null, notFound: false };
 }
 
 module.exports = {
   getPublishedYears,
-  getYearMetadata,
-  getSnapshot,
-  getNationsForYear,
-  getEventsForYear,
+  getYear,
 };

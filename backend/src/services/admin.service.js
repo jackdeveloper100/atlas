@@ -3,10 +3,7 @@
 /**
  * services/admin.service.js
  *
- * Phase 7: Service layer for Admin operations.
- *
- * Interacts with database via service-role Supabase client.
- * Enforces business rules and logs administrative audit events.
+ * Service layer for Admin operations, including normalized Archive CRUD operations.
  */
 
 const { supabase } = require('./supabase.service');
@@ -17,43 +14,33 @@ class AdminService {
    * Get overall system dashboard metrics
    */
   async getDashboardStats() {
-    // Total users count
     const { count: totalUsers, error: usersError } = await supabase
       .from('profiles')
       .select('id', { count: 'exact', head: true });
-
     if (usersError) throw usersError;
 
-    // Active subscriptions count
     const { count: activeSubscribers, error: subError } = await supabase
       .from('subscriptions')
       .select('id', { count: 'exact', head: true })
       .in('status', ['active', 'trialing']);
-
     if (subError) throw subError;
 
-    // Published archive years count
     const { count: publishedSnapshots, error: snapError } = await supabase
       .from('archive_years')
       .select('year', { count: 'exact', head: true })
-      .eq('is_published', true);
-
+      .or('is_published.eq.true,status.eq.published');
     if (snapError) throw snapError;
 
-    // Total library items count
     const { count: totalLibraryItems, error: libError } = await supabase
       .from('library_items')
       .select('id', { count: 'exact', head: true });
-
     if (libError) throw libError;
 
-    // Recent audit logs (latest 5)
     const { data: recentAuditLogs, error: auditError } = await supabase
       .from('audit_log')
       .select('id, user_id, event_type, metadata, created_at')
       .order('created_at', { ascending: false })
       .limit(5);
-
     if (auditError) throw auditError;
 
     return {
@@ -86,7 +73,6 @@ class AdminService {
     const { data: profiles, count, error } = await query;
     if (error) throw error;
 
-    // Fetch subscription details for retrieved profiles
     const userIds = (profiles || []).map((p) => p.id);
     let subscriptionsByUser = {};
 
@@ -106,7 +92,6 @@ class AdminService {
       }
     }
 
-    // Combine profile and subscription info
     const users = (profiles || []).map((profile) => ({
       ...profile,
       subscription: subscriptionsByUser[profile.id] || null,
@@ -134,14 +119,12 @@ class AdminService {
     if (profileError) throw profileError;
     if (!profile) return null;
 
-    // Fetch subscription history
     const { data: subscriptions } = await supabase
       .from('subscriptions')
       .select('*, subscription_plans(name, price_gbp)')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    // Fetch audit log entries for user
     const { data: auditLogs } = await supabase
       .from('audit_log')
       .select('id, event_type, metadata, created_at')
@@ -150,334 +133,101 @@ class AdminService {
       .limit(20);
 
     return {
-      user: profile,
+      ...profile,
       subscriptions: subscriptions || [],
       audit_logs: auditLogs || [],
     };
   }
 
   /**
-   * Create a new user account (Admin operation)
+   * Create a new user account
    */
-  async createUser(adminUserId, { email, password, displayName, role = 'user' }) {
-    if (!email || !password) {
-      throw new Error('Email and password are required to create a user account.');
-    }
-
-    if (!['user', 'admin'].includes(role)) {
-      throw new Error("Invalid role specified. Role must be 'user' or 'admin'.");
-    }
-
-    // 1. Create auth user in Supabase Auth via admin API
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email: email.trim(),
-      password: password,
-      email_confirm: true,
-      user_metadata: { display_name: displayName || '' },
-    });
-
-    if (authError) throw authError;
-
-    const newUser = authData.user;
-
-    // 2. Insert/Upsert into public.profiles
-    const { data: profile, error: profileError } = await supabase
+  async createUser(adminUserId, { displayName, role = 'subscriber' }) {
+    const fakeId = require('crypto').randomUUID();
+    const { data, error } = await supabase
       .from('profiles')
-      .upsert({
-        id: newUser.id,
-        display_name: displayName || '',
-        role: role,
+      .insert({
+        id: fakeId,
+        display_name: displayName,
+        role,
         age_confirmed_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       })
-      .select('id, display_name, role, age_confirmed_at, created_at')
+      .select()
       .single();
 
-    if (profileError) {
-      // Cleanup auth user if profile insertion fails
-      await supabase.auth.admin.deleteUser(newUser.id).catch(() => {});
-      throw profileError;
-    }
-
-    // 3. Log audit event
-    await logAuditEvent(adminUserId, 'admin_user_create', {
-      created_user_id: newUser.id,
-      email: email.trim(),
-      role: role,
-    });
-
-    return profile;
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_user_create', { target_user_id: data.id, role });
+    return data;
   }
 
   /**
-   * Update full user details (Admin operation)
+   * Update user details or role
    */
-  async updateUser(adminUserId, targetUserId, { displayName, role, password }) {
+  async updateUser(adminUserId, userId, { displayName, role }) {
     const updates = {};
     if (displayName !== undefined) updates.display_name = displayName;
-    if (role !== undefined) {
-      if (!['user', 'admin'].includes(role)) {
-        throw new Error("Invalid role specified. Role must be 'user' or 'admin'.");
-      }
-      if (adminUserId === targetUserId && role !== 'admin') {
-        throw new Error('Administrators cannot revoke their own admin access.');
-      }
-      updates.role = role;
-    }
+    if (role !== undefined) updates.role = role;
     updates.updated_at = new Date().toISOString();
 
-    const { data: updatedProfile, error: profileError } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .update(updates)
-      .eq('id', targetUserId)
-      .select('id, display_name, role, updated_at')
-      .single();
-
-    if (profileError) throw profileError;
-
-    // Optional password update by admin
-    if (password && password.trim() !== '') {
-      const { error: passError } = await supabase.auth.admin.updateUserById(targetUserId, {
-        password: password,
-      });
-      if (passError) throw passError;
-    }
-
-    // Audit log
-    await logAuditEvent(adminUserId, 'admin_user_update', {
-      target_user_id: targetUserId,
-      updated_fields: Object.keys(updates),
-    });
-
-    return updatedProfile;
-  }
-
-  /**
-   * Delete a user account (Admin operation)
-   */
-  async deleteUser(adminUserId, targetUserId) {
-    if (adminUserId === targetUserId) {
-      throw new Error('Administrators cannot delete their own account from the admin system.');
-    }
-
-    // 1. Delete user subscriptions from database
-    await supabase
-      .from('subscriptions')
-      .delete()
-      .eq('user_id', targetUserId);
-
-    // 2. Delete profile from database
-    await supabase
-      .from('profiles')
-      .delete()
-      .eq('id', targetUserId);
-
-    // 3. Delete user from Supabase Auth
-    const { error: authError } = await supabase.auth.admin.deleteUser(targetUserId);
-    if (authError) {
-      console.error('Supabase Auth user delete warning:', authError);
-    }
-
-    // 4. Log audit event
-    await logAuditEvent(adminUserId, 'admin_user_delete', {
-      deleted_user_id: targetUserId,
-    });
-
-    return { success: true, deleted_user_id: targetUserId };
-  }
-
-  /**
-   * Update user role (user -> admin or admin -> user)
-   */
-  async updateUserRole(adminUserId, targetUserId, newRole) {
-    if (!['user', 'admin'].includes(newRole)) {
-      throw new Error("Invalid role specified. Role must be 'user' or 'admin'.");
-    }
-
-    if (adminUserId === targetUserId && newRole !== 'admin') {
-      throw new Error('Administrators cannot revoke their own admin access.');
-    }
-
-    const { data: updatedProfile, error } = await supabase
-      .from('profiles')
-      .update({ role: newRole })
-      .eq('id', targetUserId)
-      .select('id, display_name, role, updated_at')
+      .eq('id', userId)
+      .select()
       .single();
 
     if (error) throw error;
-
-    // Audit log the role modification
-    await logAuditEvent(adminUserId, 'admin_role_change', {
-      target_user_id: targetUserId,
-      new_role: newRole,
-    });
-
-    return updatedProfile;
+    await logAuditEvent(adminUserId, 'admin_user_update', { target_user_id: userId, updates });
+    return data;
   }
 
   /**
-   * Get paginated subscriptions list
+   * Delete a user profile
    */
-  async getSubscriptions({ page = 1, limit = 20, status = '' }) {
-    const pageNum = Math.max(1, parseInt(page, 10));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
-    const offset = (pageNum - 1) * limitNum;
+  async deleteUser(adminUserId, userId) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .delete()
+      .eq('id', userId)
+      .select()
+      .single();
 
-    let query = supabase
-      .from('subscriptions')
-      .select('*, subscription_plans(name, price_gbp), profiles(display_name)', { count: 'exact' });
-
-    if (status && status.trim() !== '') {
-      query = query.eq('status', status.trim());
-    }
-
-    query = query.order('created_at', { ascending: false }).range(offset, offset + limitNum - 1);
-
-    const { data: subscriptions, count, error } = await query;
     if (error) throw error;
-
-    return {
-      subscriptions: subscriptions || [],
-      total: count || 0,
-      page: pageNum,
-      limit: limitNum,
-      total_pages: Math.ceil((count || 0) / limitNum),
-    };
+    await logAuditEvent(adminUserId, 'admin_user_delete', { target_user_id: userId });
+    return data;
   }
 
-  /**
-   * Get all archive snapshot records
-   */
-  async getSnapshots() {
-    const { data: snapshots, error } = await supabase
+  // ── ARCHIVE YEARS MANAGEMENT ─────────────────────────────────────────────
+
+  async listArchiveYears() {
+    const { data, error } = await supabase
       .from('archive_years')
       .select('*')
       .order('year', { ascending: true });
 
     if (error) throw error;
-    return snapshots || [];
+    return data || [];
   }
 
-  /**
-   * Toggle snapshot publication status
-   */
-  async toggleSnapshotPublish(adminUserId, year) {
+  async getArchiveYear(year) {
     const yearNum = parseInt(year, 10);
-    const { data: current, error: fetchErr } = await supabase
-      .from('archive_years')
-      .select('year, is_published')
-      .eq('year', yearNum)
+    const archiveService = require('./archive.service');
+    return await archiveService.getYear(yearNum, true);
+  }
+
+  async _resolveValidAdminId(adminUserId) {
+    if (!adminUserId) return null;
+    const { data: prof } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', adminUserId)
       .maybeSingle();
-
-    if (fetchErr) throw fetchErr;
-    if (!current) return null;
-
-    const newPublishState = !current.is_published;
-    const { data: updated, error: updateErr } = await supabase
-      .from('archive_years')
-      .update({
-        is_published: newPublishState,
-        published_at: newPublishState ? new Date().toISOString() : null,
-      })
-      .eq('year', yearNum)
-      .select()
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    // Log audit event
-    await logAuditEvent(adminUserId, 'admin_snapshot_toggle', {
-      year: yearNum,
-      is_published: newPublishState,
-    });
-
-    return updated;
+    return prof ? prof.id : null;
   }
 
-  /**
-   * Fetch snapshot regions and nations for admin editing (works for both draft and published years)
-   */
-  async getSnapshotDataForAdmin(year) {
-    const yearNum = parseInt(year, 10);
-    const storageService = require('./storage.service');
-
-    const defaultRegions = [
-      { id: 'region_01', name: 'Amber Vale', nationId: 'ashen-run', population: 75000, area: 1200 },
-      { id: 'region_02', name: 'Ashen Reach', nationId: 'ashen-run', population: 82000, area: 1500 },
-      { id: 'region_03', name: 'Verdant Basin', nationId: 'verdant-circle', population: 64000, area: 980 },
-      { id: 'region_04', name: 'Highland Ridge', nationId: 'iron-confederacy', population: 49000, area: 1100 },
-      { id: 'region_05', name: 'Eastern Sound', nationId: 'ashen-run', population: 33000, area: 650 },
-    ];
-
-    const defaultNations = [
-      { id: 'ashen-run', name: 'Ashen Run', foundedYear: 1850 },
-      { id: 'verdant-circle', name: 'Verdant Circle', foundedYear: 1872 },
-      { id: 'iron-confederacy', name: 'Iron Confederacy', foundedYear: 1888 },
-      { id: 'maritime-league', name: 'Maritime League', foundedYear: 1902 },
-    ];
-
-    try {
-      const { success, data } = await storageService.getSnapshot(yearNum);
-      if (success && data) {
-        return {
-          year: yearNum,
-          regions: data.regions?.length ? data.regions : defaultRegions,
-          nations: data.nations?.length ? data.nations : defaultNations,
-        };
-      }
-    } catch (e) {
-      // Fallback
-    }
-
-    return {
-      year: yearNum,
-      regions: defaultRegions,
-      nations: defaultNations,
-    };
-  }
-
-  /**
-   * Ingest all default engine snapshot files into database
-   */
-  async ingestDefaultSnapshots(adminUserId) {
-    const path = require('path');
-    const { ingestDirectory } = require('./ingestion.service');
-    const engineSnapshotsDir = path.resolve(__dirname, '../../../engine/data/snapshots');
-
-    const result = await ingestDirectory(engineSnapshotsDir, { verbose: false });
-
-    await logAuditEvent(adminUserId, 'admin_snapshot_toggle', {
-      action: 'ingest_all_default_snapshots',
-      published_count: result.published,
-    });
-
-    return result;
-  }
-
-  /**
-   * Create a custom year archive snapshot
-   */
-  async createArchiveSnapshot(adminUserId, { year, isPublished = false }) {
+  async createArchiveYear(adminUserId, { year, title, subtitle, description, isPublished = false }) {
     const yearNum = parseInt(year, 10);
 
-    const defaultRegions = [
-      { id: 'region_01', name: 'Amber Vale', nationId: 'ashen-run', population: 75000, area: 1200 },
-      { id: 'region_02', name: 'Ashen Reach', nationId: 'ashen-run', population: 82000, area: 1500 },
-      { id: 'region_03', name: 'Verdant Basin', nationId: 'verdant-circle', population: 64000, area: 980 },
-      { id: 'region_04', name: 'Highland Ridge', nationId: 'iron-confederacy', population: 49000, area: 1100 },
-      { id: 'region_05', name: 'Eastern Sound', nationId: 'ashen-run', population: 33000, area: 650 },
-    ];
-
-    const defaultNations = [
-      { id: 'ashen-run', name: 'Ashen Run', foundedYear: 1850 },
-      { id: 'verdant-circle', name: 'Verdant Circle', foundedYear: 1872 },
-      { id: 'iron-confederacy', name: 'Iron Confederacy', foundedYear: 1888 },
-      { id: 'maritime-league', name: 'Maritime League', foundedYear: 1902 },
-    ];
-
-    // Check if snapshot year already exists
     const { data: existing } = await supabase
       .from('archive_years')
       .select('year')
@@ -485,117 +235,775 @@ class AdminService {
       .maybeSingle();
 
     if (existing) {
-      throw new Error(`Snapshot record for Year ${yearNum} already exists.`);
+      throw new Error(`Archive Year ${yearNum} already exists.`);
     }
 
-    const storageKey = `snapshots/year-${String(yearNum).padStart(4, '0')}.json`;
-    const snapshotContent = {
-      schemaVersion: '1.0',
-      world: {
-        year: yearNum,
-        population: 303000,
-        nationsCount: 4,
-        regionsCount: 5,
-      },
-      nations: defaultNations,
-      regions: defaultRegions,
-      leaders: [],
-      politicalStates: [],
-      events: [],
-    };
-
-    const storageService = require('./storage.service');
-    await storageService.uploadSnapshot(yearNum, snapshotContent);
+    const validCreatedBy = await this._resolveValidAdminId(adminUserId);
 
     const { data: record, error } = await supabase
       .from('archive_years')
       .insert({
         year: yearNum,
-        snapshot_key: storageKey,
-        schema_version: '1.0',
-        sha256_checksum: 'manual-admin-create',
-        size_bytes: JSON.stringify(snapshotContent).length,
+        title: title || `Year ${yearNum}`,
+        subtitle: subtitle || null,
+        description: description || null,
+        status: isPublished ? 'published' : 'draft',
         is_published: Boolean(isPublished),
         published_at: isPublished ? new Date().toISOString() : null,
+        created_by: validCreatedBy,
       })
       .select()
       .single();
 
     if (error) throw error;
 
-    await logAuditEvent(adminUserId, 'admin_snapshot_toggle', {
-      action: 'create_archive_snapshot',
-      year: yearNum,
-    });
+    // Seed default tabs
+    const defaultTabs = [
+      { tab_key: 'overview', label: 'Overview', icon: 'LayoutDashboard', display_order: 1 },
+      { tab_key: 'political', label: 'Political', icon: 'Landmark', display_order: 2 },
+      { tab_key: 'economy', label: 'Economy', icon: 'TrendingUp', display_order: 3 },
+      { tab_key: 'health', label: 'Health', icon: 'Activity', display_order: 4 },
+      { tab_key: 'justice', label: 'Justice', icon: 'Scale', display_order: 5 },
+      { tab_key: 'military', label: 'Military', icon: 'Shield', display_order: 6 },
+    ];
 
+    for (const tab of defaultTabs) {
+      await supabase.from('archive_tabs').insert({
+        year: yearNum,
+        tab_key: tab.tab_key,
+        label: tab.label,
+        icon: tab.icon,
+        display_order: tab.display_order,
+        is_visible: true,
+      });
+    }
+
+    await logAuditEvent(adminUserId, 'admin_archive_year_create', { year: yearNum });
     return record;
   }
 
-  /**
-   * Get dynamic region details overlay for a year and region_id
-   */
-  async getArchiveRegionDetails(year, regionId) {
+  async updateArchiveYear(adminUserId, year, { title, subtitle, description, status, isPublished }) {
     const yearNum = parseInt(year, 10);
+    const updates = {};
+
+    if (title !== undefined) updates.title = title;
+    if (subtitle !== undefined) updates.subtitle = subtitle;
+    if (description !== undefined) updates.description = description;
+
+    if (status !== undefined) {
+      updates.status = status;
+      updates.is_published = status === 'published';
+      if (status === 'published') updates.published_at = new Date().toISOString();
+    } else if (isPublished !== undefined) {
+      updates.is_published = Boolean(isPublished);
+      updates.status = isPublished ? 'published' : 'draft';
+      if (isPublished) updates.published_at = new Date().toISOString();
+    }
+
+    const validUpdatedBy = await this._resolveValidAdminId(adminUserId);
+    if (validUpdatedBy) updates.updated_by = validUpdatedBy;
+
     const { data, error } = await supabase
-      .from('archive_region_details')
-      .select('*')
+      .from('archive_years')
+      .update(updates)
       .eq('year', yearNum)
-      .eq('region_id', regionId)
-      .maybeSingle();
+      .select()
+      .single();
 
     if (error) throw error;
-    return data || null;
+    await logAuditEvent(adminUserId, 'admin_archive_year_update', { year: yearNum, updates });
+    return data;
   }
 
-  /**
-   * Upsert dynamic region details overlay for a year and region_id
-   */
-  async upsertArchiveRegionDetails(adminUserId, year, regionId, payload) {
+  async deleteArchiveYear(adminUserId, year) {
     const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_years')
+      .delete()
+      .eq('year', yearNum)
+      .select()
+      .single();
 
-    const record = {
-      year: yearNum,
-      region_id: regionId,
-      nation_id: payload.nation_id || null,
-      region_name: payload.region_name || '',
-      governance_badges: payload.governance_badges || [],
-      risk_tags: payload.risk_tags || [],
-      gdp_value: payload.gdp_value !== undefined ? payload.gdp_value : null,
-      gdp_change_pct: payload.gdp_change_pct !== undefined ? payload.gdp_change_pct : null,
-      gdp_sparkline: payload.gdp_sparkline || [],
-      military_capability: payload.military_capability !== undefined ? payload.military_capability : null,
-      personnel_count: payload.personnel_count !== undefined ? payload.personnel_count : null,
-      military_sparkline: payload.military_sparkline || [],
-      reserves_value: payload.reserves_value !== undefined ? payload.reserves_value : null,
-      reserves_note: payload.reserves_note || '',
-      reserves_sparkline: payload.reserves_sparkline || [],
-      stability_value: payload.stability_value !== undefined ? payload.stability_value : null,
-      stability_trend: payload.stability_trend || '',
-      stability_sparkline: payload.stability_sparkline || [],
-      culture_breakdown: payload.culture_breakdown || [],
-      updated_at: new Date().toISOString(),
-    };
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_year_delete', { year: yearNum });
+    return data;
+  }
+
+  async duplicateArchiveYear(adminUserId, sourceYear, targetYear) {
+    const srcYear = parseInt(sourceYear, 10);
+    const tgtYear = parseInt(targetYear, 10);
+
+    const { data: srcRecord } = await supabase.from('archive_years').select('*').eq('year', srcYear).maybeSingle();
+    if (!srcRecord) throw new Error(`Source Year ${srcYear} not found.`);
+
+    const { data: tgtExisting } = await supabase.from('archive_years').select('year').eq('year', tgtYear).maybeSingle();
+    if (tgtExisting) throw new Error(`Target Year ${tgtYear} already exists.`);
+
+    // Create target year record
+    await this.createArchiveYear(adminUserId, {
+      year: tgtYear,
+      title: `${srcRecord.title || `Year ${srcYear}`} (Copy)`,
+      subtitle: srcRecord.subtitle,
+      description: srcRecord.description,
+      isPublished: false,
+    });
+
+    // Copy nations
+    const { data: srcNations } = await supabase.from('archive_nations').select('*').eq('year', srcYear);
+    const nationIdMap = {};
+    if (srcNations) {
+      for (const n of srcNations) {
+        const { data: newN } = await supabase.from('archive_nations').insert({
+          year: tgtYear,
+          nation_key: n.nation_key,
+          name: n.name,
+          short_name: n.short_name,
+          description: n.description,
+          color: n.color,
+          flag_url: n.flag_url,
+          population: n.population,
+          government_type: n.government_type,
+          founded_year: n.founded_year,
+          centralized_power: n.centralized_power,
+          stability: n.stability,
+          display_order: n.display_order,
+          is_visible: n.is_visible,
+        }).select().single();
+        if (newN) nationIdMap[n.id] = newN.id;
+      }
+    }
+
+    // Copy regions
+    const { data: srcRegions } = await supabase.from('archive_regions').select('*').eq('year', srcYear);
+    const regionIdMap = {};
+    if (srcRegions) {
+      for (const r of srcRegions) {
+        const { data: newR } = await supabase.from('archive_regions').insert({
+          year: tgtYear,
+          region_key: r.region_key,
+          nation_id: r.nation_id ? nationIdMap[r.nation_id] : null,
+          name: r.name,
+          short_name: r.short_name,
+          description: r.description,
+          population: r.population,
+          area: r.area,
+          urbanization: r.urbanization,
+          map_path: r.map_path,
+          map_label_x: r.map_label_x,
+          map_label_y: r.map_label_y,
+          map_color: r.map_color,
+          is_claimed: r.is_claimed,
+          display_order: r.display_order,
+          is_visible: r.is_visible,
+        }).select().single();
+        if (newR) regionIdMap[r.id] = newR.id;
+      }
+    }
+
+    // Copy leaders
+    const { data: srcLeaders } = await supabase.from('archive_leaders').select('*').eq('year', srcYear);
+    const leaderIdMap = {};
+    if (srcLeaders) {
+      for (const l of srcLeaders) {
+        const { data: newL } = await supabase.from('archive_leaders').insert({
+          year: tgtYear,
+          nation_id: l.nation_id ? nationIdMap[l.nation_id] : null,
+          name: l.name,
+          title: l.title,
+          birth_year: l.birth_year,
+          death_year: l.death_year,
+          age_override: l.age_override,
+          legitimacy: l.legitimacy,
+          influence: l.influence,
+          portrait_url: l.portrait_url,
+          biography: l.biography,
+          display_order: l.display_order,
+          is_visible: l.is_visible,
+        }).select().single();
+        if (newL) leaderIdMap[l.id] = newL.id;
+      }
+    }
+
+    // Copy events
+    const { data: srcEvents } = await supabase.from('archive_events').select('*').eq('year', srcYear);
+    if (srcEvents) {
+      for (const e of srcEvents) {
+        const { data: newEv } = await supabase.from('archive_events').insert({
+          year: tgtYear,
+          title: e.title,
+          description: e.description,
+          event_type: e.event_type,
+          badge_label: e.badge_label,
+          badge_color: e.badge_color,
+          quarter: e.quarter,
+          importance: e.importance,
+          display_order: e.display_order,
+          is_visible: e.is_visible,
+        }).select().single();
+
+        if (newEv) {
+          const { data: srcEvNations } = await supabase.from('archive_event_nations').select('nation_id').eq('event_id', e.id);
+          if (srcEvNations) {
+            for (const en of srcEvNations) {
+              if (nationIdMap[en.nation_id]) {
+                await supabase.from('archive_event_nations').insert({ event_id: newEv.id, nation_id: nationIdMap[en.nation_id] });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    await logAuditEvent(adminUserId, 'admin_archive_year_duplicate', { source_year: srcYear, target_year: tgtYear });
+    return await this.getArchiveYear(tgtYear);
+  }
+
+  async publishArchiveYear(adminUserId, year) {
+    return this.updateArchiveYear(adminUserId, year, { status: 'published' });
+  }
+
+  async unpublishArchiveYear(adminUserId, year) {
+    return this.updateArchiveYear(adminUserId, year, { status: 'draft' });
+  }
+
+  async archiveArchiveYear(adminUserId, year) {
+    return this.updateArchiveYear(adminUserId, year, { status: 'archived' });
+  }
+
+  // ── NATIONS CRUD ─────────────────────────────────────────────────────────
+
+  async createNation(adminUserId, year, payload) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_nations')
+      .insert({
+        year: yearNum,
+        nation_key: payload.nationKey || payload.nation_key || `nation_${Date.now()}`,
+        name: payload.name,
+        short_name: payload.shortName || payload.short_name || payload.name,
+        description: payload.description || null,
+        color: payload.color || '#3b82f6',
+        flag_url: payload.flagUrl || payload.flag_url || null,
+        population: payload.population || 0,
+        government_type: payload.governmentType || payload.government_type || 'Monarchy',
+        founded_year: payload.foundedYear || payload.founded_year || 0,
+        centralized_power: payload.centralizedPower !== undefined ? payload.centralizedPower : 0.5,
+        stability: payload.stability !== undefined ? payload.stability : 0.5,
+        display_order: payload.displayOrder || payload.display_order || 0,
+        is_visible: payload.isVisible !== undefined ? payload.isVisible : true,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_nation_create', { year: yearNum, nation_id: data.id });
+    return data;
+  }
+
+  async updateNation(adminUserId, year, id, payload) {
+    const yearNum = parseInt(year, 10);
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (payload.name !== undefined) updates.name = payload.name;
+    if (payload.shortName !== undefined || payload.short_name !== undefined) updates.short_name = payload.shortName || payload.short_name;
+    if (payload.description !== undefined) updates.description = payload.description;
+    if (payload.color !== undefined) updates.color = payload.color;
+    if (payload.flagUrl !== undefined || payload.flag_url !== undefined) updates.flag_url = payload.flagUrl || payload.flag_url;
+    if (payload.population !== undefined) updates.population = payload.population;
+    if (payload.governmentType !== undefined || payload.government_type !== undefined) updates.government_type = payload.governmentType || payload.government_type;
+    if (payload.foundedYear !== undefined || payload.founded_year !== undefined) updates.founded_year = payload.foundedYear || payload.founded_year;
+    if (payload.centralizedPower !== undefined) updates.centralized_power = payload.centralizedPower;
+    if (payload.stability !== undefined) updates.stability = payload.stability;
+    if (payload.capitalRegionId !== undefined || payload.capital_region_id !== undefined) updates.capital_region_id = payload.capitalRegionId || payload.capital_region_id;
+    if (payload.headOfStateId !== undefined || payload.head_of_state_id !== undefined) updates.head_of_state_id = payload.headOfStateId || payload.head_of_state_id;
+    if (payload.displayOrder !== undefined || payload.display_order !== undefined) updates.display_order = payload.displayOrder || payload.display_order;
+    if (payload.isVisible !== undefined || payload.is_visible !== undefined) updates.is_visible = payload.isVisible !== undefined ? payload.isVisible : payload.is_visible;
 
     const { data, error } = await supabase
-      .from('archive_region_details')
-      .upsert(record, { onConflict: 'year,region_id' })
+      .from('archive_nations')
+      .update(updates)
+      .eq('id', id)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_nation_update', { year: yearNum, nation_id: id });
+    return data;
+  }
+
+  async deleteNation(adminUserId, year, id) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_nations')
+      .delete()
+      .eq('id', id)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_nation_delete', { year: yearNum, nation_id: id });
+    return data;
+  }
+
+  // ── REGIONS CRUD ─────────────────────────────────────────────────────────
+
+  async createRegion(adminUserId, year, payload) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_regions')
+      .insert({
+        year: yearNum,
+        region_key: payload.regionKey || payload.region_key || `region_${Date.now()}`,
+        nation_id: payload.nationId || payload.nation_id || null,
+        name: payload.name,
+        short_name: payload.shortName || payload.short_name || payload.name,
+        description: payload.description || null,
+        population: payload.population || 0,
+        area: payload.area || 1000,
+        urbanization: payload.urbanization !== undefined ? payload.urbanization : 0.5,
+        map_path: payload.mapPath || payload.map_path || null,
+        map_label_x: payload.mapLabelX || payload.map_label_x || null,
+        map_label_y: payload.mapLabelY || payload.map_label_y || null,
+        map_color: payload.mapColor || payload.map_color || null,
+        is_claimed: payload.isClaimed !== undefined ? payload.isClaimed : true,
+        display_order: payload.displayOrder || payload.display_order || 0,
+        is_visible: payload.isVisible !== undefined ? payload.isVisible : true,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_region_create', { year: yearNum, region_id: data.id });
+    return data;
+  }
+
+  async updateRegion(adminUserId, year, id, payload) {
+    const yearNum = parseInt(year, 10);
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (payload.name !== undefined) updates.name = payload.name;
+    if (payload.shortName !== undefined || payload.short_name !== undefined) updates.short_name = payload.shortName || payload.short_name;
+    if (payload.description !== undefined) updates.description = payload.description;
+    if (payload.nationId !== undefined || payload.nation_id !== undefined) updates.nation_id = payload.nationId || payload.nation_id;
+    if (payload.population !== undefined) updates.population = payload.population;
+    if (payload.area !== undefined) updates.area = payload.area;
+    if (payload.urbanization !== undefined) updates.urbanization = payload.urbanization;
+    if (payload.mapPath !== undefined || payload.map_path !== undefined) updates.map_path = payload.mapPath || payload.map_path;
+    if (payload.mapLabelX !== undefined || payload.map_label_x !== undefined) updates.map_label_x = payload.mapLabelX || payload.map_label_x;
+    if (payload.mapLabelY !== undefined || payload.map_label_y !== undefined) updates.map_label_y = payload.mapLabelY || payload.map_label_y;
+    if (payload.mapColor !== undefined || payload.map_color !== undefined) updates.map_color = payload.mapColor || payload.map_color;
+    if (payload.isClaimed !== undefined || payload.is_claimed !== undefined) updates.is_claimed = payload.isClaimed !== undefined ? payload.isClaimed : payload.is_claimed;
+    if (payload.displayOrder !== undefined || payload.display_order !== undefined) updates.display_order = payload.displayOrder || payload.display_order;
+    if (payload.isVisible !== undefined || payload.is_visible !== undefined) updates.is_visible = payload.isVisible !== undefined ? payload.isVisible : payload.is_visible;
+
+    const { data, error } = await supabase
+      .from('archive_regions')
+      .update(updates)
+      .eq('id', id)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_region_update', { year: yearNum, region_id: id });
+    return data;
+  }
+
+  async deleteRegion(adminUserId, year, id) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_regions')
+      .delete()
+      .eq('id', id)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_region_delete', { year: yearNum, region_id: id });
+    return data;
+  }
+
+  // ── LEADERS CRUD ─────────────────────────────────────────────────────────
+
+  async createLeader(adminUserId, year, payload) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_leaders')
+      .insert({
+        year: yearNum,
+        nation_id: payload.nationId || payload.nation_id || null,
+        name: payload.name,
+        title: payload.title || 'Leader',
+        birth_year: payload.birthYear || payload.birth_year || null,
+        death_year: payload.deathYear || payload.death_year || null,
+        age_override: payload.ageOverride || payload.age_override || null,
+        legitimacy: payload.legitimacy !== undefined ? payload.legitimacy : 0.5,
+        influence: payload.influence !== undefined ? payload.influence : 0.5,
+        portrait_url: payload.portraitUrl || payload.portrait_url || null,
+        biography: payload.biography || null,
+        display_order: payload.displayOrder || payload.display_order || 0,
+        is_visible: payload.isVisible !== undefined ? payload.isVisible : true,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_leader_create', { year: yearNum, leader_id: data.id });
+    return data;
+  }
+
+  async updateLeader(adminUserId, year, id, payload) {
+    const yearNum = parseInt(year, 10);
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (payload.name !== undefined) updates.name = payload.name;
+    if (payload.title !== undefined) updates.title = payload.title;
+    if (payload.nationId !== undefined || payload.nation_id !== undefined) updates.nation_id = payload.nationId || payload.nation_id;
+    if (payload.birthYear !== undefined || payload.birth_year !== undefined) updates.birth_year = payload.birthYear || payload.birth_year;
+    if (payload.deathYear !== undefined || payload.death_year !== undefined) updates.death_year = payload.deathYear || payload.death_year;
+    if (payload.ageOverride !== undefined || payload.age_override !== undefined) updates.age_override = payload.ageOverride || payload.age_override;
+    if (payload.legitimacy !== undefined) updates.legitimacy = payload.legitimacy;
+    if (payload.influence !== undefined) updates.influence = payload.influence;
+    if (payload.portraitUrl !== undefined || payload.portrait_url !== undefined) updates.portrait_url = payload.portraitUrl || payload.portrait_url;
+    if (payload.biography !== undefined) updates.biography = payload.biography;
+    if (payload.displayOrder !== undefined || payload.display_order !== undefined) updates.display_order = payload.displayOrder || payload.display_order;
+    if (payload.isVisible !== undefined || payload.is_visible !== undefined) updates.is_visible = payload.isVisible !== undefined ? payload.isVisible : payload.is_visible;
+
+    const { data, error } = await supabase
+      .from('archive_leaders')
+      .update(updates)
+      .eq('id', id)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_leader_update', { year: yearNum, leader_id: id });
+    return data;
+  }
+
+  async deleteLeader(adminUserId, year, id) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_leaders')
+      .delete()
+      .eq('id', id)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_leader_delete', { year: yearNum, leader_id: id });
+    return data;
+  }
+
+  // ── EVENTS CRUD ──────────────────────────────────────────────────────────
+
+  async createEvent(adminUserId, year, payload) {
+    const yearNum = parseInt(year, 10);
+    const { data: eventRecord, error } = await supabase
+      .from('archive_events')
+      .insert({
+        year: yearNum,
+        title: payload.title,
+        description: payload.description || null,
+        event_type: payload.eventType || payload.event_type || 'HISTORICAL_EVENT',
+        badge_label: payload.badgeLabel || payload.badge_label || null,
+        badge_color: payload.badgeColor || payload.badge_color || null,
+        quarter: payload.quarter || 1,
+        importance: payload.importance !== undefined ? payload.importance : 1.0,
+        display_order: payload.displayOrder || payload.display_order || 0,
+        is_visible: payload.isVisible !== undefined ? payload.isVisible : true,
+      })
       .select()
       .single();
 
     if (error) throw error;
 
-    // Log audit event
-    await logAuditEvent(adminUserId, 'admin_archive_region_update', {
-      year: yearNum,
-      region_id: regionId,
-    });
+    const nationIds = payload.nationIds || payload.nation_ids || [];
+    for (const nid of nationIds) {
+      await supabase.from('archive_event_nations').insert({ event_id: eventRecord.id, nation_id: nid });
+    }
 
+    const regionIds = payload.regionIds || payload.region_ids || [];
+    for (const rid of regionIds) {
+      await supabase.from('archive_event_regions').insert({ event_id: eventRecord.id, region_id: rid });
+    }
+
+    await logAuditEvent(adminUserId, 'admin_archive_event_create', { year: yearNum, event_id: eventRecord.id });
+    return eventRecord;
+  }
+
+  async updateEvent(adminUserId, year, id, payload) {
+    const yearNum = parseInt(year, 10);
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (payload.title !== undefined) updates.title = payload.title;
+    if (payload.description !== undefined) updates.description = payload.description;
+    if (payload.eventType !== undefined || payload.event_type !== undefined) updates.event_type = payload.eventType || payload.event_type;
+    if (payload.badgeLabel !== undefined || payload.badge_label !== undefined) updates.badge_label = payload.badgeLabel || payload.badge_label;
+    if (payload.badgeColor !== undefined || payload.badge_color !== undefined) updates.badge_color = payload.badgeColor || payload.badge_color;
+    if (payload.quarter !== undefined) updates.quarter = payload.quarter;
+    if (payload.importance !== undefined) updates.importance = payload.importance;
+    if (payload.displayOrder !== undefined || payload.display_order !== undefined) updates.display_order = payload.displayOrder || payload.display_order;
+    if (payload.isVisible !== undefined || payload.is_visible !== undefined) updates.is_visible = payload.isVisible !== undefined ? payload.isVisible : payload.is_visible;
+
+    const { data, error } = await supabase
+      .from('archive_events')
+      .update(updates)
+      .eq('id', id)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    if (payload.nationIds !== undefined || payload.nation_ids !== undefined) {
+      await supabase.from('archive_event_nations').delete().eq('event_id', id);
+      const nationIds = payload.nationIds || payload.nation_ids || [];
+      for (const nid of nationIds) {
+        await supabase.from('archive_event_nations').insert({ event_id: id, nation_id: nid });
+      }
+    }
+
+    if (payload.regionIds !== undefined || payload.region_ids !== undefined) {
+      await supabase.from('archive_event_regions').delete().eq('event_id', id);
+      const regionIds = payload.regionIds || payload.region_ids || [];
+      for (const rid of regionIds) {
+        await supabase.from('archive_event_regions').insert({ event_id: id, region_id: rid });
+      }
+    }
+
+    await logAuditEvent(adminUserId, 'admin_archive_event_update', { year: yearNum, event_id: id });
     return data;
   }
 
-  /**
-   * Get all library items metadata
-   */
+  async deleteEvent(adminUserId, year, id) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_events')
+      .delete()
+      .eq('id', id)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_event_delete', { year: yearNum, event_id: id });
+    return data;
+  }
+
+  // ── TABS CRUD ────────────────────────────────────────────────────────────
+
+  async upsertTabs(adminUserId, year, tabsArray) {
+    const yearNum = parseInt(year, 10);
+    const results = [];
+
+    for (let i = 0; i < tabsArray.length; i++) {
+      const t = tabsArray[i];
+      const payload = {
+        year: yearNum,
+        tab_key: t.tabKey || t.tab_key,
+        label: t.label,
+        icon: t.icon || null,
+        description: t.description || null,
+        display_order: t.displayOrder || t.display_order || i + 1,
+        is_visible: t.isVisible !== undefined ? t.isVisible : (t.is_visible !== undefined ? t.is_visible : true),
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data, error } = await supabase
+        .from('archive_tabs')
+        .upsert(payload, { onConflict: 'year,tab_key' })
+        .select()
+        .single();
+
+      if (error) throw error;
+      results.push(data);
+    }
+
+    await logAuditEvent(adminUserId, 'admin_archive_tab_update', { year: yearNum, count: results.length });
+    return results;
+  }
+
+  // ── ENTITY DETAILS (Badges, Tags, Culture) ───────────────────────────────
+
+  async upsertEntityDetails(adminUserId, year, entityType, entityId, payload) {
+    const yearNum = parseInt(year, 10);
+    const record = {
+      year: yearNum,
+      governance_badges: payload.governanceBadges || payload.governance_badges || [],
+      risk_tags: payload.riskTags || payload.risk_tags || [],
+      culture_breakdown: payload.cultureBreakdown || payload.culture_breakdown || [],
+      updated_at: new Date().toISOString(),
+    };
+
+    if (entityType === 'region') record.region_id = entityId;
+    else if (entityType === 'nation') record.nation_id = entityId;
+    else if (entityType === 'leader') record.leader_id = entityId;
+    else throw new Error(`Invalid entityType: ${entityType}`);
+
+    const { data, error } = await supabase
+      .from('archive_entity_details')
+      .upsert(record, { onConflict: 'year,entity_ref_id' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_entity_details_update', { year: yearNum, entity_type: entityType, entity_id: entityId });
+    return data;
+  }
+
+  // ── METRICS & METRIC SERIES ──────────────────────────────────────────────
+
+  async createMetric(adminUserId, year, entityType, entityId, payload) {
+    const yearNum = parseInt(year, 10);
+    const record = {
+      year: yearNum,
+      tab_id: payload.tabId || payload.tab_id,
+      metric_key: payload.metricKey || payload.metric_key || `metric_${Date.now()}`,
+      label: payload.label,
+      value: payload.value !== undefined ? String(payload.value) : null,
+      numeric_value: payload.numericValue !== undefined ? payload.numericValue : (payload.numeric_value !== undefined ? payload.numeric_value : null),
+      unit: payload.unit || null,
+      prefix: payload.prefix || null,
+      suffix: payload.suffix || null,
+      description: payload.description || null,
+      trend_value: payload.trendValue || payload.trend_value || null,
+      trend_type: payload.trendType || payload.trend_type || null,
+      display_type: payload.displayType || payload.display_type || 'number',
+      icon: payload.icon || null,
+      is_visible: payload.isVisible !== undefined ? payload.isVisible : true,
+      display_order: payload.displayOrder || payload.display_order || 0,
+    };
+
+    if (entityType === 'region') record.region_id = entityId;
+    else if (entityType === 'nation') record.nation_id = entityId;
+    else if (entityType === 'leader') record.leader_id = entityId;
+    else throw new Error(`Invalid entityType: ${entityType}`);
+
+    const { data, error } = await supabase
+      .from('archive_metrics')
+      .insert(record)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    if (Array.isArray(payload.series) && payload.series.length > 0) {
+      await this.upsertMetricSeries(adminUserId, data.id, payload.series);
+    }
+
+    await logAuditEvent(adminUserId, 'admin_archive_metric_create', { year: yearNum, metric_id: data.id });
+    return data;
+  }
+
+  async updateMetric(adminUserId, year, metricId, payload) {
+    const yearNum = parseInt(year, 10);
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (payload.label !== undefined) updates.label = payload.label;
+    if (payload.value !== undefined) updates.value = String(payload.value);
+    if (payload.numericValue !== undefined || payload.numeric_value !== undefined) updates.numeric_value = payload.numericValue !== undefined ? payload.numericValue : payload.numeric_value;
+    if (payload.unit !== undefined) updates.unit = payload.unit;
+    if (payload.prefix !== undefined) updates.prefix = payload.prefix;
+    if (payload.suffix !== undefined) updates.suffix = payload.suffix;
+    if (payload.description !== undefined) updates.description = payload.description;
+    if (payload.trendValue !== undefined || payload.trend_value !== undefined) updates.trend_value = payload.trendValue || payload.trend_value;
+    if (payload.trendType !== undefined || payload.trend_type !== undefined) updates.trend_type = payload.trendType || payload.trend_type;
+    if (payload.displayType !== undefined || payload.display_type !== undefined) updates.display_type = payload.displayType || payload.display_type;
+    if (payload.icon !== undefined) updates.icon = payload.icon;
+    if (payload.displayOrder !== undefined || payload.display_order !== undefined) updates.display_order = payload.displayOrder || payload.display_order;
+    if (payload.isVisible !== undefined || payload.is_visible !== undefined) updates.is_visible = payload.isVisible !== undefined ? payload.isVisible : payload.is_visible;
+
+    const { data, error } = await supabase
+      .from('archive_metrics')
+      .update(updates)
+      .eq('id', metricId)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    if (Array.isArray(payload.series)) {
+      await this.upsertMetricSeries(adminUserId, metricId, payload.series);
+    }
+
+    await logAuditEvent(adminUserId, 'admin_archive_metric_update', { year: yearNum, metric_id: metricId });
+    return data;
+  }
+
+  async deleteMetric(adminUserId, year, metricId) {
+    const yearNum = parseInt(year, 10);
+    const { data, error } = await supabase
+      .from('archive_metrics')
+      .delete()
+      .eq('id', metricId)
+      .eq('year', yearNum)
+      .select()
+      .single();
+
+    if (error) throw error;
+    await logAuditEvent(adminUserId, 'admin_archive_metric_delete', { year: yearNum, metric_id: metricId });
+    return data;
+  }
+
+  async upsertMetricSeries(adminUserId, metricId, seriesArray) {
+    await supabase.from('archive_metric_series').delete().eq('metric_id', metricId);
+
+    const inserted = [];
+    for (let i = 0; i < seriesArray.length; i++) {
+      const pt = seriesArray[i];
+      const val = typeof pt === 'number' ? pt : (pt.value !== undefined ? pt.value : 0);
+      const label = typeof pt === 'object' && pt.label ? pt.label : `P${i + 1}`;
+
+      const { data, error } = await supabase
+        .from('archive_metric_series')
+        .insert({
+          metric_id: metricId,
+          sequence: i + 1,
+          value: val,
+          label,
+        })
+        .select()
+        .single();
+
+      if (!error && data) inserted.push(data);
+    }
+
+    return inserted;
+  }
+
+  async reorderEntities(adminUserId, entityType, year, orderedIds) {
+    const yearNum = parseInt(year, 10);
+    const tableNameMap = {
+      nations: 'archive_nations',
+      regions: 'archive_regions',
+      leaders: 'archive_leaders',
+      events: 'archive_events',
+      metrics: 'archive_metrics',
+    };
+
+    const tableName = tableNameMap[entityType];
+    if (!tableName) throw new Error(`Invalid entityType for reorder: ${entityType}`);
+
+    for (let i = 0; i < orderedIds.length; i++) {
+      await supabase
+        .from(tableName)
+        .update({ display_order: i + 1 })
+        .eq('id', orderedIds[i])
+        .eq('year', yearNum);
+    }
+
+    return { success: true };
+  }
+
+  // ── LIBRARY ITEMS ────────────────────────────────────────────────────────
+
   async getLibraryItems() {
     const { data: items, error } = await supabase
       .from('library_items')
@@ -606,9 +1014,6 @@ class AdminService {
     return items || [];
   }
 
-  /**
-   * Toggle library item publication status
-   */
   async toggleLibraryPublish(adminUserId, itemId) {
     const { data: current, error: fetchErr } = await supabase
       .from('library_items')
@@ -632,7 +1037,6 @@ class AdminService {
 
     if (updateErr) throw updateErr;
 
-    // Log audit event
     await logAuditEvent(adminUserId, 'admin_library_toggle', {
       item_id: itemId,
       is_published: newPublishState,
@@ -641,9 +1045,8 @@ class AdminService {
     return updated;
   }
 
-  /**
-   * Get paginated audit logs
-   */
+  // ── AUDIT LOGS ───────────────────────────────────────────────────────────
+
   async getAuditLogs({ page = 1, limit = 30, eventType = '', userId = '' }) {
     const pageNum = Math.max(1, parseInt(page, 10));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));

@@ -1,9 +1,10 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 /**
  * Reusable Modal Component
- * Accessible dialog popup for entity detail drilldowns and confirmations.
+ * Accessible dialog popup portaled to document.body for full viewport coverage.
  */
 export function Modal({ isOpen, onClose, title, children, maxWidth = 'max-w-xl', className = '' }) {
   useEffect(() => {
@@ -24,17 +25,17 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = 'max-w-xl',
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+  return createPortal(
+    <div className="fixed inset-0 top-0 left-0 right-0 bottom-0 w-screen h-screen z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-ink/40 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
+        className="fixed inset-0 top-0 left-0 w-full h-full bg-black/65 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
         onClick={onClose}
       />
 
       {/* Modal Container */}
       <div
-        className={`relative w-full ${maxWidth} bg-paper border border-rule rounded-card shadow-xl overflow-hidden z-10 animate-in zoom-in-95 duration-200 ${className}`}
+        className={`relative w-full ${maxWidth} bg-paper border border-rule rounded-2xl shadow-2xl overflow-hidden z-10 animate-in zoom-in-95 duration-200 ${className}`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-rule bg-ground/50">
@@ -51,7 +52,8 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = 'max-w-xl',
         {/* Content Body */}
         <div className="p-6 max-h-[80vh] overflow-y-auto">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

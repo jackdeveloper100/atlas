@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Shield, MapPin, Crown, ScrollText } from 'lucide-react';
-import useSnapshot from '../../hooks/useSnapshot';
+import useArchiveYear from '../../hooks/useArchiveYear';
 import YearDisplay from '../../components/archive/YearDisplay';
 import YearScrubber from '../../components/archive/YearScrubber';
 import NationsTable from '../../components/archive/NationsTable';
@@ -11,16 +11,10 @@ import EventsFeed from '../../components/archive/EventsFeed';
 import EntityDetailModal from '../../components/archive/EntityDetailModal';
 import InteractiveWorldMap from '../../components/archive/InteractiveWorldMap';
 import Tabs from '../../components/ui/Tabs';
-import Skeleton, { TableSkeleton } from '../../components/ui/Skeleton';
+import { TableSkeleton } from '../../components/ui/Skeleton';
 import ErrorState from '../../components/ui/ErrorState';
 import LockedState from '../../components/ui/LockedState';
-import Card from '../../components/ui/Card';
-import Button from '../../components/ui/Button';
 
-/**
- * ArchivePage Main View Component
- * Full year-scrubbing Archive UI consuming published simulation snapshot data.
- */
 export function ArchivePage() {
   const { year: yearParam } = useParams();
   const navigate = useNavigate();
@@ -30,20 +24,18 @@ export function ArchivePage() {
     selectedYear,
     setSelectedYear,
     publishedYears,
-    currentSnapshot,
+    currentArchiveData,
     isLoading,
-    isLoadingYears,
     error,
     minYear,
     maxYear,
     refreshSnapshot,
-  } = useSnapshot(Number.isNaN(parsedYearParam) ? 0 : parsedYearParam);
+  } = useArchiveYear(Number.isNaN(parsedYearParam) ? 0 : parsedYearParam);
 
   const [activeTab, setActiveTab] = useState('nations');
   const [selectedEntity, setSelectedEntity] = useState(null);
   const [selectedEntityType, setSelectedEntityType] = useState('nation');
 
-  // Sync the :year route param -> selected year (deep-linking into /archive/:year)
   const didInitFromParam = useRef(false);
   useEffect(() => {
     if (didInitFromParam.current) return;
@@ -53,7 +45,6 @@ export function ArchivePage() {
     didInitFromParam.current = true;
   }, [parsedYearParam, selectedYear, setSelectedYear]);
 
-  // Sync selected year -> URL, so scrubbing is shareable/deep-linkable
   useEffect(() => {
     if (!didInitFromParam.current) return;
     navigate(`/archive/${selectedYear}`, { replace: true });
@@ -68,14 +59,11 @@ export function ArchivePage() {
     setSelectedEntity(null);
   };
 
-  // Real snapshot shape: nations/regions/leaders/politicalStates/events are
-  // top-level siblings of `world` (which only holds aggregate counts) — see
-  // engine/src/snapshots/SNAPSHOT_SCHEMA.md.
-  const nations = currentSnapshot?.nations || [];
-  const regions = currentSnapshot?.regions || [];
-  const leaders = currentSnapshot?.leaders || [];
-  const politicalStates = currentSnapshot?.politicalStates || [];
-  const events = currentSnapshot?.events || [];
+  const nations = currentArchiveData?.nations || [];
+  const regions = currentArchiveData?.regions || [];
+  const leaders = currentArchiveData?.leaders || [];
+  const events = currentArchiveData?.events || [];
+  const entityDetailsMap = currentArchiveData?.entities || {};
 
   const nationMap = useMemo(() => {
     const map = {};
@@ -85,22 +73,6 @@ export function ArchivePage() {
     return map;
   }, [nations]);
 
-  const leaderMap = useMemo(() => {
-    const map = {};
-    leaders.forEach((l) => {
-      map[l.id] = l;
-    });
-    return map;
-  }, [leaders]);
-
-  const politicalStateMap = useMemo(() => {
-    const map = {};
-    politicalStates.forEach((p) => {
-      map[p.nationId] = p;
-    });
-    return map;
-  }, [politicalStates]);
-
   const tabsConfig = [
     { id: 'nations', label: 'Nations', icon: Shield, count: nations.length },
     { id: 'regions', label: 'Regions', icon: MapPin, count: regions.length },
@@ -108,9 +80,22 @@ export function ArchivePage() {
     { id: 'events', label: 'Events Feed', icon: ScrollText, count: events.length },
   ];
 
+  // Compose full data object for EntityDetailModal from entities map
+  const selectedEntityFullData = useMemo(() => {
+    if (!selectedEntity || !selectedEntity.id) return null;
+    const key = `${selectedEntityType}:${selectedEntity.id}`;
+    const extra = entityDetailsMap[key] || {};
+    return {
+      ...selectedEntity,
+      nationName: selectedEntity.nationId ? nationMap[selectedEntity.nationId]?.name : null,
+      tabs: currentArchiveData?.tabs || [],
+      ...extra,
+    };
+  }, [selectedEntity, selectedEntityType, entityDetailsMap, nationMap, currentArchiveData]);
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 animate-in fade-in duration-300">
-      {/* Top Floating Control Bar matching Figma */}
+      {/* Top Floating Control Bar */}
       <div className="flex justify-center sticky top-20 z-30 pt-2">
         <YearScrubber
           selectedYear={selectedYear}
@@ -122,7 +107,10 @@ export function ArchivePage() {
         />
       </div>
 
-      {/* Interactive World Map Vector Canvas matching Figma */}
+      {/* Year Overview Display Card */}
+      <YearDisplay selectedYear={selectedYear} snapshot={currentArchiveData} />
+
+      {/* Interactive World Map */}
       <InteractiveWorldMap
         regions={regions}
         nations={nations}
@@ -150,7 +138,6 @@ export function ArchivePage() {
         <TableSkeleton rows={6} cols={4} />
       ) : (
         <div className="space-y-6">
-          {/* View Selection Black Pill Tabs */}
           <div className="flex justify-center">
             <Tabs
               tabs={tabsConfig}
@@ -160,23 +147,12 @@ export function ArchivePage() {
             />
           </div>
 
-          {/* Tab Panes */}
           <div className="pt-2">
             {activeTab === 'nations' && (
               <NationsTable
                 nations={nations}
                 leaders={leaders}
-                politicalStates={politicalStates}
-                onSelectNation={(n) =>
-                  handleOpenDetail(
-                    {
-                      ...n,
-                      politicalState: politicalStateMap[n.id],
-                      currentLeader: leaderMap[n.currentLeaderId],
-                    },
-                    'nation'
-                  )
-                }
+                onSelectNation={(n) => handleOpenDetail(n, 'nation')}
               />
             )}
 
@@ -184,9 +160,7 @@ export function ArchivePage() {
               <RegionsTable
                 regions={regions}
                 nations={nations}
-                onSelectRegion={(r) =>
-                  handleOpenDetail({ ...r, nation: nationMap[r.nationId] }, 'region')
-                }
+                onSelectRegion={(r) => handleOpenDetail(r, 'region')}
               />
             )}
 
@@ -195,9 +169,7 @@ export function ArchivePage() {
                 leaders={leaders}
                 nations={nations}
                 currentYear={selectedYear}
-                onSelectLeader={(l) =>
-                  handleOpenDetail({ ...l, nation: nationMap[l.nationId] }, 'leader')
-                }
+                onSelectLeader={(l) => handleOpenDetail(l, 'leader')}
               />
             )}
 
@@ -214,6 +186,7 @@ export function ArchivePage() {
       {/* Entity Detail Drilldown Modal */}
       <EntityDetailModal
         entity={selectedEntity}
+        entityData={selectedEntityFullData}
         type={selectedEntityType}
         currentYear={selectedYear}
         isOpen={Boolean(selectedEntity)}

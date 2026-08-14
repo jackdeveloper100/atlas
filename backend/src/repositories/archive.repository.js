@@ -3,31 +3,20 @@
 /**
  * archive.repository.js
  *
- * All direct Supabase/PostgreSQL database access for the Archive domain.
- *
- * Tables used:
- *   - archive_years       (migration 002)
- *   - nations_index       (migration 002)
- *   - historical_events   (migration 002)
- *
- * IMPORTANT: All writes use the service-role client (bypasses RLS).
- * Reads are also via service-role — subscription checks happen in Express middleware.
+ * All direct Supabase/PostgreSQL database read access for the Archive domain.
+ * Relational model (Migration 006).
  */
 
 const { supabase } = require('../services/supabase.service');
 
-// ── archive_years ────────────────────────────────────────────────────────────
-
 /**
- * List all published years, ordered ascending.
- *
- * @returns {Promise<{ data: object[]|null, error: string|null }>}
+ * List all published years, ordered ascending by year.
  */
 async function listPublishedYears() {
   const { data, error } = await supabase
     .from('archive_years')
-    .select('year, snapshot_key, schema_version, snapshot_size_bytes, published_at, created_at')
-    .eq('is_published', true)
+    .select('year, title, subtitle, description, display_order, is_published, published_at, created_at')
+    .or('is_published.eq.true,status.eq.published')
     .order('year', { ascending: true });
 
   if (error) return { data: null, error: error.message };
@@ -36,212 +25,199 @@ async function listPublishedYears() {
 
 /**
  * Find a single archive_years row by year.
- *
- * @param {number} year
- * @returns {Promise<{ data: object|null, error: string|null }>}
  */
 async function findYear(year) {
   const { data, error } = await supabase
     .from('archive_years')
     .select('*')
     .eq('year', year)
-    .maybeSingle();  // returns null (not error) if not found
+    .maybeSingle();
 
   if (error) return { data: null, error: error.message };
   return { data, error: null };
 }
 
 /**
- * Insert or update an archive_years record.
- * Uses upsert on the PRIMARY KEY (year).
- *
- * @param {object} record - Fields to insert/update
- * @param {number} record.year
- * @param {string} record.snapshot_key
- * @param {string} record.schema_version
- * @param {number} record.snapshot_size_bytes
- * @param {string} record.checksum_sha256
- * @param {boolean} [record.is_published]
- * @returns {Promise<{ data: object|null, error: string|null }>}
- */
-async function upsertYear(record) {
-  const { data, error } = await supabase
-    .from('archive_years')
-    .upsert(record, {
-      onConflict: 'year',
-      ignoreDuplicates: false,  // update on conflict
-    })
-    .select()
-    .single();
-
-  if (error) return { data: null, error: error.message };
-  return { data, error: null };
-}
-
-/**
- * Mark a year as published.
- *
- * @param {number} year
- * @returns {Promise<{ data: object|null, error: string|null }>}
- */
-async function markYearPublished(year) {
-  const { data, error } = await supabase
-    .from('archive_years')
-    .update({
-      is_published: true,
-      published_at: new Date().toISOString(),
-    })
-    .eq('year', year)
-    .select()
-    .single();
-
-  if (error) return { data: null, error: error.message };
-  return { data, error: null };
-}
-
-// ── nations_index ─────────────────────────────────────────────────────────────
-
-/**
- * Upsert nations for a given year.
- * Uses unique constraint on (year, nation_id).
- *
- * @param {number} year
- * @param {object[]} nations - Array of nation objects from snapshot
- * @returns {Promise<{ data: object[]|null, error: string|null }>}
- */
-async function upsertNationsForYear(year, nations) {
-  if (!nations || nations.length === 0) {
-    return { data: [], error: null };
-  }
-
-  const records = nations.map(n => ({
-    year,
-    nation_id: n.id,
-    name: n.name,
-    population: n.population,
-    is_active: true,
-  }));
-
-  const { data, error } = await supabase
-    .from('nations_index')
-    .upsert(records, {
-      onConflict: 'year,nation_id',
-      ignoreDuplicates: false,
-    })
-    .select();
-
-  if (error) return { data: null, error: error.message };
-  return { data, error: null };
-}
-
-/**
- * Get nations index for a specific year.
- *
- * @param {number} year
- * @returns {Promise<{ data: object[]|null, error: string|null }>}
+ * Find nations for a specific year.
  */
 async function findNationsForYear(year) {
   const { data, error } = await supabase
-    .from('nations_index')
-    .select('nation_id, name, population, is_active')
+    .from('archive_nations')
+    .select('*')
     .eq('year', year)
-    .order('name', { ascending: true });
+    .eq('is_visible', true)
+    .order('display_order', { ascending: true });
 
   if (error) return { data: null, error: error.message };
   return { data, error: null };
 }
 
-// ── historical_events ─────────────────────────────────────────────────────────
+/**
+ * Find regions for a specific year.
+ */
+async function findRegionsForYear(year) {
+  const { data, error } = await supabase
+    .from('archive_regions')
+    .select('*')
+    .eq('year', year)
+    .eq('is_visible', true)
+    .order('display_order', { ascending: true });
+
+  if (error) return { data: null, error: error.message };
+  return { data, error: null };
+}
 
 /**
- * Upsert events for a given year.
- * Uses unique constraint on (year, event_id).
- *
- * @param {number} year
- * @param {object[]} events - Array of event objects from snapshot
- * @returns {Promise<{ data: object[]|null, error: string|null }>}
+ * Find leaders for a specific year.
  */
-async function upsertEventsForYear(year, events) {
+async function findLeadersForYear(year) {
+  const { data, error } = await supabase
+    .from('archive_leaders')
+    .select('*')
+    .eq('year', year)
+    .eq('is_visible', true)
+    .order('display_order', { ascending: true });
+
+  if (error) return { data: null, error: error.message };
+  return { data, error: null };
+}
+
+/**
+ * Find events for a specific year, including linked nation and region IDs.
+ */
+async function findEventsForYear(year) {
+  const { data: events, error: evErr } = await supabase
+    .from('archive_events')
+    .select('*')
+    .eq('year', year)
+    .eq('is_visible', true)
+    .order('display_order', { ascending: true });
+
+  if (evErr) return { data: null, error: evErr.message };
+
   if (!events || events.length === 0) {
     return { data: [], error: null };
   }
 
-  const records = events.map(e => ({
-    year,
-    event_id: e.id,
-    event_type: e.type,
-    nation_id: (e.nationIds && e.nationIds.length > 0) ? e.nationIds[0] : null,
-    description: e.description,
-    quarter: e.quarter,
+  const eventIds = events.map(e => e.id);
+
+  const { data: eventNations } = await supabase
+    .from('archive_event_nations')
+    .select('event_id, nation_id')
+    .in('event_id', eventIds);
+
+  const { data: eventRegions } = await supabase
+    .from('archive_event_regions')
+    .select('event_id, region_id')
+    .in('event_id', eventIds);
+
+  const nationMap = {};
+  if (eventNations) {
+    for (const en of eventNations) {
+      if (!nationMap[en.event_id]) nationMap[en.event_id] = [];
+      nationMap[en.event_id].push(en.nation_id);
+    }
+  }
+
+  const regionMap = {};
+  if (eventRegions) {
+    for (const er of eventRegions) {
+      if (!regionMap[er.event_id]) regionMap[er.event_id] = [];
+      regionMap[er.event_id].push(er.region_id);
+    }
+  }
+
+  const composedEvents = events.map(e => ({
+    ...e,
+    nation_ids: nationMap[e.id] || [],
+    region_ids: regionMap[e.id] || [],
   }));
 
+  return { data: composedEvents, error: null };
+}
+
+/**
+ * Find tabs for a specific year.
+ */
+async function findTabsForYear(year) {
   const { data, error } = await supabase
-    .from('historical_events')
-    .upsert(records, {
-      onConflict: 'year,event_id',
-      ignoreDuplicates: false,
-    })
-    .select();
+    .from('archive_tabs')
+    .select('*')
+    .eq('year', year)
+    .eq('is_visible', true)
+    .order('display_order', { ascending: true });
 
   if (error) return { data: null, error: error.message };
   return { data, error: null };
 }
 
 /**
- * Find historical events with optional filters.
- *
- * @param {object} filters
- * @param {number} [filters.year] - Filter to specific year
- * @param {string} [filters.event_type] - Filter by event type
- * @param {string} [filters.nation_id] - Filter by nation ID
- * @param {number} [filters.page] - Page number (1-indexed)
- * @param {number} [filters.per_page] - Items per page (max 100)
- * @returns {Promise<{ data: object[]|null, total: number, error: string|null }>}
+ * Find entity details (badges, risk tags, culture breakdown) for a specific year.
  */
-async function findEvents(filters = {}) {
-  const {
-    year,
-    event_type,
-    nation_id,
-    page = 1,
-    per_page = 20,
-  } = filters;
+async function findEntityDetailsForYear(year) {
+  const { data, error } = await supabase
+    .from('archive_entity_details')
+    .select('*')
+    .eq('year', year);
 
-  const safePerPage = Math.min(Math.max(1, parseInt(per_page, 10) || 20), 100);
-  const safePage = Math.max(1, parseInt(page, 10) || 1);
-  const from = (safePage - 1) * safePerPage;
-  const to = from + safePerPage - 1;
+  if (error) return { data: null, error: error.message };
+  return { data, error: null };
+}
 
-  let query = supabase
-    .from('historical_events')
-    .select('year, event_id, event_type, nation_id, description, quarter, created_at', { count: 'exact' })
-    .order('year', { ascending: true })
-    .order('quarter', { ascending: true })
-    .range(from, to);
+/**
+ * Find metrics with series for a specific year.
+ */
+async function findMetricsForYear(year) {
+  const { data: metrics, error: mErr } = await supabase
+    .from('archive_metrics')
+    .select('*')
+    .eq('year', year)
+    .eq('is_visible', true)
+    .order('display_order', { ascending: true });
 
-  if (year !== undefined && year !== null) {
-    query = query.eq('year', year);
-  }
-  if (event_type) {
-    query = query.eq('event_type', event_type);
-  }
-  if (nation_id) {
-    query = query.eq('nation_id', nation_id);
+  if (mErr) return { data: null, error: mErr.message };
+
+  if (!metrics || metrics.length === 0) {
+    return { data: [], error: null };
   }
 
-  const { data, error, count } = await query;
+  const metricIds = metrics.map(m => m.id);
 
-  if (error) return { data: null, total: 0, error: error.message };
-  return { data, total: count || 0, error: null };
+  const { data: seriesPoints } = await supabase
+    .from('archive_metric_series')
+    .select('*')
+    .in('metric_id', metricIds)
+    .order('sequence', { ascending: true });
+
+  const seriesMap = {};
+  if (seriesPoints) {
+    for (const sp of seriesPoints) {
+      if (!seriesMap[sp.metric_id]) seriesMap[sp.metric_id] = [];
+      seriesMap[sp.metric_id].push({
+        id: sp.id,
+        label: sp.label,
+        value: Number(sp.value),
+        sequence: sp.sequence,
+      });
+    }
+  }
+
+  const composedMetrics = metrics.map(m => ({
+    ...m,
+    series: seriesMap[m.id] || [],
+  }));
+
+  return { data: composedMetrics, error: null };
 }
 
 module.exports = {
   listPublishedYears,
   findYear,
-  upsertYear,
-  markYearPublished,
-  upsertNationsForYear,
   findNationsForYear,
-  upsertEventsForYear,
-  findEvents,
+  findRegionsForYear,
+  findLeadersForYear,
+  findEventsForYear,
+  findTabsForYear,
+  findEntityDetailsForYear,
+  findMetricsForYear,
 };

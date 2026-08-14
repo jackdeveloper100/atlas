@@ -7,35 +7,22 @@
 import api from '../api/client';
 
 export const adminService = {
-  /**
-   * Fetch system overview metrics and dashboard stats
-   */
   async getDashboardStats() {
     return await api.get('/admin/stats');
   },
 
-  /**
-   * Fetch paginated list of user accounts
-   */
   async getUsers({ page = 1, limit = 20, search = '' } = {}) {
     const params = new URLSearchParams();
     if (page) params.append('page', page);
     if (limit) params.append('limit', limit);
     if (search) params.append('search', search);
-
     return await api.get(`/admin/users?${params.toString()}`);
   },
 
-  /**
-   * Fetch details for a specific user
-   */
   async getUserById(id) {
     return await api.get(`/admin/users/${id}`);
   },
 
-  /**
-   * Create a new user account (Admin operation)
-   */
   async createUser({ email, password, displayName, role = 'user' }) {
     return await api.post('/admin/users', {
       email,
@@ -45,9 +32,6 @@ export const adminService = {
     });
   },
 
-  /**
-   * Update full user account details (Admin operation)
-   */
   async updateUser(id, { displayName, role, password }) {
     return await api.put(`/admin/users/${id}`, {
       display_name: displayName,
@@ -56,105 +40,139 @@ export const adminService = {
     });
   },
 
-  /**
-   * Delete a user account (Admin operation)
-   */
   async deleteUser(id) {
     return await api.delete(`/admin/users/${id}`);
   },
 
-  /**
-   * Update user role ('user' or 'admin')
-   */
-  async updateUserRole(id, role) {
-    return await api.put(`/admin/users/${id}/role`, { role });
-  },
-
-  /**
-   * Fetch paginated user subscriptions
-   */
   async getSubscriptions({ page = 1, limit = 20, status = '' } = {}) {
     const params = new URLSearchParams();
     if (page) params.append('page', page);
     if (limit) params.append('limit', limit);
     if (status) params.append('status', status);
-
     return await api.get(`/admin/subscriptions?${params.toString()}`);
   },
 
-  /**
-   * Fetch all published and draft archive snapshots
-   */
-  async getSnapshots() {
-    return await api.get('/admin/snapshots');
+  // ── ARCHIVE YEARS MANAGEMENT ─────────────────────────────────────────────
+
+  async listArchiveYears() {
+    return await api.get('/admin/archive/years');
   },
 
-  /**
-   * Toggle snapshot publication status
-   */
-  async toggleSnapshotPublish(year) {
-    return await api.post(`/admin/snapshots/${year}/toggle-publish`);
+  async createArchiveYear(payload) {
+    return await api.post('/admin/archive/years', payload);
   },
 
-  /**
-   * Fetch snapshot regions and nations for admin editing (works for draft and published years)
-   */
-  async getSnapshotDataForAdmin(year) {
-    return await api.get(`/admin/snapshots/${year}/data`);
+  async getArchiveYear(year) {
+    return await api.get(`/admin/archive/years/${year}`);
   },
 
-  /**
-   * Ingest all 11 default engine snapshot JSON files into database
-   */
-  async ingestDefaultSnapshots() {
-    return await api.post('/admin/snapshots/ingest-defaults');
+  async updateArchiveYear(year, payload) {
+    return await api.put(`/admin/archive/years/${year}`, payload);
   },
 
-  /**
-   * Create a new custom archive snapshot year
-   */
-  async createArchiveSnapshot({ year, is_published = false }) {
-    return await api.post('/admin/snapshots', { year, is_published });
+  async deleteArchiveYear(year) {
+    return await api.delete(`/admin/archive/years/${year}`);
   },
 
-  /**
-   * Fetch dynamic region details for a given year and region ID
-   */
-  async getArchiveRegionDetails(year, regionId) {
-    return await api.get(`/admin/archive/years/${year}/regions/${regionId}`);
+  async duplicateArchiveYear(year, targetYear) {
+    return await api.post(`/admin/archive/years/${year}/duplicate`, { target_year: targetYear });
   },
 
-  /**
-   * Update dynamic region details for a given year and region ID
-   */
-  async updateArchiveRegionDetails(year, regionId, payload) {
-    return await api.put(`/admin/archive/years/${year}/regions/${regionId}`, payload);
+  async publishArchiveYear(year) {
+    return await api.post(`/admin/archive/years/${year}/publish`);
   },
 
-  /**
-   * Fetch all library audio/video items
-   */
+  async unpublishArchiveYear(year) {
+    return await api.post(`/admin/archive/years/${year}/unpublish`);
+  },
+
+  async archiveArchiveYear(year) {
+    return await api.post(`/admin/archive/years/${year}/archive`);
+  },
+
+  // ── NATIONS / REGIONS / LEADERS / EVENTS ───────────────────────────
+
+  async createNation(year, payload) {
+    return await api.post(`/admin/archive/years/${year}/nations`, payload);
+  },
+  async updateNation(year, id, payload) {
+    return await api.put(`/admin/archive/years/${year}/nations/${id}`, payload);
+  },
+  async deleteNation(year, id) {
+    return await api.delete(`/admin/archive/years/${year}/nations/${id}`);
+  },
+
+  async createRegion(year, payload) {
+    return await api.post(`/admin/archive/years/${year}/regions`, payload);
+  },
+  async updateRegion(year, id, payload) {
+    return await api.put(`/admin/archive/years/${year}/regions/${id}`, payload);
+  },
+  async deleteRegion(year, id) {
+    return await api.delete(`/admin/archive/years/${year}/regions/${id}`);
+  },
+
+  async createLeader(year, payload) {
+    return await api.post(`/admin/archive/years/${year}/leaders`, payload);
+  },
+  async updateLeader(year, id, payload) {
+    return await api.put(`/admin/archive/years/${year}/leaders/${id}`, payload);
+  },
+  async deleteLeader(year, id) {
+    return await api.delete(`/admin/archive/years/${year}/leaders/${id}`);
+  },
+
+  async createEvent(year, payload) {
+    return await api.post(`/admin/archive/years/${year}/events`, payload);
+  },
+  async updateEvent(year, id, payload) {
+    return await api.put(`/admin/archive/years/${year}/events/${id}`, payload);
+  },
+  async deleteEvent(year, id) {
+    return await api.delete(`/admin/archive/years/${year}/events/${id}`);
+  },
+
+  async updateTabs(year, tabs) {
+    return await api.put(`/admin/archive/years/${year}/tabs`, { tabs });
+  },
+
+  async updateEntityDetails(year, type, id, payload) {
+    return await api.put(`/admin/archive/years/${year}/entities/${type}/${id}/details`, payload);
+  },
+
+  async createMetric(year, type, id, payload) {
+    return await api.post(`/admin/archive/years/${year}/entities/${type}/${id}/metrics`, payload);
+  },
+  async updateMetric(year, metricId, payload) {
+    return await api.put(`/admin/archive/years/${year}/metrics/${metricId}`, payload);
+  },
+  async deleteMetric(year, metricId) {
+    return await api.delete(`/admin/archive/years/${year}/metrics/${metricId}`);
+  },
+  async updateMetricSeries(year, metricId, series) {
+    return await api.put(`/admin/archive/years/${year}/metrics/${metricId}/series`, { series });
+  },
+
+  async reorderEntities(year, type, orderedIds) {
+    return await api.post(`/admin/archive/years/${year}/reorder/${type}`, { ordered_ids: orderedIds });
+  },
+
+  // ── LIBRARY & AUDIT LOGS ─────────────────────────────────────────────────
+
   async getLibraryItems() {
     return await api.get('/admin/library');
   },
 
-  /**
-   * Toggle library item publication status
-   */
   async toggleLibraryPublish(id) {
     return await api.post(`/admin/library/${id}/toggle-publish`);
   },
 
-  /**
-   * Fetch paginated audit log entries
-   */
   async getAuditLogs({ page = 1, limit = 30, eventType = '', userId = '' } = {}) {
     const params = new URLSearchParams();
     if (page) params.append('page', page);
     if (limit) params.append('limit', limit);
     if (eventType) params.append('eventType', eventType);
     if (userId) params.append('userId', userId);
-
     return await api.get(`/admin/audit-logs?${params.toString()}`);
   },
 };

@@ -3,13 +3,7 @@
 /**
  * routes/admin.routes.js
  *
- * Phase 7: REST API endpoints for ATLAS Admin System.
- *
- * Protected by `authenticate` + `requireAdmin` middleware.
- * Returns standard response envelope:
- *   { success: true, data: {...}, error: null }
- * or:
- *   { success: false, data: null, error: "message" }
+ * REST API endpoints for ATLAS Admin System, including full Archive management.
  */
 
 const express = require('express');
@@ -22,13 +16,11 @@ const adminService = require('../services/admin.service');
 
 const router = express.Router();
 
-// Apply authenticate and requireAdmin to ALL admin routes
 router.use(authenticate);
 router.use(requireAdmin);
 
 /**
  * GET /api/admin/stats
- * Get overall system metrics and dashboard activity summary.
  */
 router.get('/stats', async (req, res) => {
   try {
@@ -42,7 +34,6 @@ router.get('/stats', async (req, res) => {
 
 /**
  * GET /api/admin/users
- * Query paginated list of user accounts.
  */
 router.get(
   '/users',
@@ -66,7 +57,6 @@ router.get(
 
 /**
  * GET /api/admin/users/:id
- * Get detailed profile, subscription history, and activity logs for a specific user.
  */
 router.get(
   '/users/:id',
@@ -75,9 +65,7 @@ router.get(
   async (req, res) => {
     try {
       const userDetail = await adminService.getUserById(req.params.id);
-      if (!userDetail) {
-        return sendError(res, 'User not found', 404);
-      }
+      if (!userDetail) return sendError(res, 'User not found', 404);
       return sendSuccess(res, userDetail);
     } catch (err) {
       console.error('Admin getUserById error:', err);
@@ -88,7 +76,6 @@ router.get(
 
 /**
  * POST /api/admin/users
- * Create a new user account directly from Admin system.
  */
 router.post(
   '/users',
@@ -102,15 +89,11 @@ router.post(
   async (req, res) => {
     try {
       const adminUserId = req.user.id;
-      const { email, password, display_name, role } = req.body;
-
+      const { display_name, role } = req.body;
       const newUser = await adminService.createUser(adminUserId, {
-        email,
-        password,
         displayName: display_name,
         role: role || 'user',
       });
-
       return sendSuccess(res, newUser, 201);
     } catch (err) {
       console.error('Admin createUser error:', err);
@@ -121,7 +104,6 @@ router.post(
 
 /**
  * PUT /api/admin/users/:id
- * Update user profile details, role, or password.
  */
 router.put(
   '/users/:id',
@@ -129,21 +111,17 @@ router.put(
     param('id').isUUID().withMessage('Valid user UUID required'),
     body('display_name').optional().isString().trim(),
     body('role').optional().isIn(['user', 'admin']).withMessage("Role must be 'user' or 'admin'"),
-    body('password').optional().isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
   ],
   validate,
   async (req, res) => {
     try {
       const adminUserId = req.user.id;
       const targetUserId = req.params.id;
-      const { display_name, role, password } = req.body;
-
+      const { display_name, role } = req.body;
       const updatedUser = await adminService.updateUser(adminUserId, targetUserId, {
         displayName: display_name,
         role,
-        password,
       });
-
       return sendSuccess(res, updatedUser);
     } catch (err) {
       console.error('Admin updateUser error:', err);
@@ -154,7 +132,6 @@ router.put(
 
 /**
  * DELETE /api/admin/users/:id
- * Delete a user account and associated profile/subscriptions.
  */
 router.delete(
   '/users/:id',
@@ -164,9 +141,8 @@ router.delete(
     try {
       const adminUserId = req.user.id;
       const targetUserId = req.params.id;
-
-      const result = await adminService.deleteUser(adminUserId, targetUserId);
-      return sendSuccess(res, result);
+      const deletedUser = await adminService.deleteUser(adminUserId, targetUserId);
+      return sendSuccess(res, deletedUser);
     } catch (err) {
       console.error('Admin deleteUser error:', err);
       return sendError(res, err.message || 'Failed to delete user', 400);
@@ -174,228 +150,327 @@ router.delete(
   }
 );
 
-/**
- * PUT /api/admin/users/:id/role
- * Update user role (strictly 'user' or 'admin').
- */
-router.put(
-  '/users/:id/role',
-  [
-    param('id').isUUID().withMessage('Valid user UUID required'),
-    body('role')
-      .isIn(['user', 'admin'])
-      .withMessage("Role must be strictly 'user' or 'admin'"),
-  ],
-  validate,
-  async (req, res) => {
-    try {
-      const targetUserId = req.params.id;
-      const { role } = req.body;
-      const adminUserId = req.user.id;
+// ── ARCHIVE YEARS MANAGEMENT ─────────────────────────────────────────────
 
-      const updatedProfile = await adminService.updateUserRole(
-        adminUserId,
-        targetUserId,
-        role
-      );
-
-      return sendSuccess(res, {
-        message: `User role successfully updated to '${role}'`,
-        user: updatedProfile,
-      });
-    } catch (err) {
-      console.error('Admin updateUserRole error:', err);
-      const statusCode = err.message.includes('revoke') ? 400 : 500;
-      return sendError(res, err.message || 'Failed to update user role', statusCode);
-    }
-  }
-);
-
-/**
- * GET /api/admin/subscriptions
- * Query paginated list of user subscriptions.
- */
-router.get(
-  '/subscriptions',
-  [
-    query('page').optional().isInt({ min: 1 }).toInt(),
-    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
-    query('status').optional().isString(),
-  ],
-  validate,
-  async (req, res) => {
-    try {
-      const { page = 1, limit = 20, status = '' } = req.query;
-      const result = await adminService.getSubscriptions({ page, limit, status });
-      return sendSuccess(res, result);
-    } catch (err) {
-      console.error('Admin getSubscriptions error:', err);
-      return sendError(res, 'Failed to fetch subscriptions', 500);
-    }
-  }
-);
-
-/**
- * GET /api/admin/snapshots
- * Query all published and draft archive snapshot records.
- */
-router.get('/snapshots', async (req, res) => {
+router.get('/archive/years', async (req, res) => {
   try {
-    const snapshots = await adminService.getSnapshots();
-    return sendSuccess(res, { snapshots });
+    const years = await adminService.listArchiveYears();
+    return sendSuccess(res, { years });
   } catch (err) {
-    console.error('Admin getSnapshots error:', err);
-    return sendError(res, 'Failed to fetch snapshots', 500);
+    console.error('Admin listArchiveYears error:', err);
+    return sendError(res, 'Failed to fetch archive years', 500);
   }
 });
 
-/**
- * POST /api/admin/snapshots/:year/toggle-publish
- * Toggle snapshot publication state for a specific year.
- */
 router.post(
-  '/snapshots/:year/toggle-publish',
-  [param('year').isInt({ min: 0 }).toInt()],
-  validate,
-  async (req, res) => {
-    try {
-      const { year } = req.params;
-      const updated = await adminService.toggleSnapshotPublish(req.user.id, year);
-      if (!updated) {
-        return sendError(res, `Snapshot for year ${year} not found`, 404);
-      }
-      return sendSuccess(res, {
-        message: `Snapshot year ${year} publication set to ${updated.is_published}`,
-        snapshot: updated,
-      });
-    } catch (err) {
-      console.error('Admin toggleSnapshotPublish error:', err);
-      return sendError(res, 'Failed to update snapshot publication status', 500);
-    }
-  }
-);
-
-/**
- * GET /api/admin/snapshots/:year/data
- * Fetch snapshot regions and nations for admin editing (works for both draft and published years).
- */
-router.get(
-  '/snapshots/:year/data',
-  [param('year').isInt({ min: 0 }).toInt()],
-  validate,
-  async (req, res) => {
-    try {
-      const { year } = req.params;
-      const data = await adminService.getSnapshotDataForAdmin(year);
-      return sendSuccess(res, data);
-    } catch (err) {
-      console.error('Admin getSnapshotData error:', err);
-      return sendError(res, 'Failed to fetch snapshot admin data', 500);
-    }
-  }
-);
-
-/**
- * POST /api/admin/snapshots/ingest-defaults
- * Ingest all 11 default engine snapshot JSON files into the database.
- */
-router.post('/snapshots/ingest-defaults', async (req, res) => {
-  try {
-    const result = await adminService.ingestDefaultSnapshots(req.user.id);
-    return sendSuccess(res, {
-      message: `Ingestion complete. ${result.published} snapshots published.`,
-      result,
-    });
-  } catch (err) {
-    console.error('Admin ingestDefaultSnapshots error:', err);
-    return sendError(res, err.message || 'Failed to ingest default snapshots', 500);
-  }
-});
-
-/**
- * POST /api/admin/snapshots
- * Create a new custom archive snapshot year.
- */
-router.post(
-  '/snapshots',
+  '/archive/years',
   [
     body('year').isInt({ min: 0, max: 9999 }).toInt(),
+    body('title').optional().isString().trim(),
+    body('subtitle').optional().isString().trim(),
+    body('description').optional().isString().trim(),
     body('is_published').optional().isBoolean(),
   ],
   validate,
   async (req, res) => {
     try {
-      const { year, is_published = false } = req.body;
-      const snapshot = await adminService.createArchiveSnapshot(req.user.id, {
+      const { year, title, subtitle, description, is_published = false } = req.body;
+      const record = await adminService.createArchiveYear(req.user.id, {
         year,
+        title,
+        subtitle,
+        description,
         isPublished: is_published,
       });
-      return sendSuccess(res, {
-        message: `Archive snapshot for Year ${year} successfully created.`,
-        snapshot,
-      });
+      return sendSuccess(res, record, 201);
     } catch (err) {
-      console.error('Admin createArchiveSnapshot error:', err);
-      return sendError(res, err.message || 'Failed to create archive snapshot', 500);
+      console.error('Admin createArchiveYear error:', err);
+      return sendError(res, err.message || 'Failed to create archive year', 400);
     }
   }
 );
 
-/**
- * GET /api/admin/archive/years/:year/regions/:regionId
- * Fetch dynamic region details overlay for a year and region ID.
- */
 router.get(
-  '/archive/years/:year/regions/:regionId',
-  [
-    param('year').isInt({ min: 0 }).toInt(),
-    param('regionId').isString().notEmpty(),
-  ],
+  '/archive/years/:year',
+  [param('year').isInt({ min: 0 }).toInt()],
   validate,
   async (req, res) => {
     try {
-      const { year, regionId } = req.params;
-      const details = await adminService.getArchiveRegionDetails(year, regionId);
-      return sendSuccess(res, { details });
+      const yearData = await adminService.getArchiveYear(req.params.year);
+      if (!yearData.success || yearData.notFound) return sendError(res, 'Archive year not found', 404);
+      return sendSuccess(res, yearData.data);
     } catch (err) {
-      console.error('Admin getArchiveRegionDetails error:', err);
-      return sendError(res, 'Failed to fetch region details overlay', 500);
+      console.error('Admin getArchiveYear error:', err);
+      return sendError(res, 'Failed to fetch archive year', 500);
     }
   }
 );
 
-/**
- * PUT /api/admin/archive/years/:year/regions/:regionId
- * Upsert dynamic region details overlay for a year and region ID.
- */
 router.put(
-  '/archive/years/:year/regions/:regionId',
+  '/archive/years/:year',
   [
     param('year').isInt({ min: 0 }).toInt(),
-    param('regionId').isString().notEmpty(),
+    body('title').optional().isString().trim(),
+    body('subtitle').optional().isString().trim(),
+    body('description').optional().isString().trim(),
+    body('status').optional().isIn(['draft', 'published', 'archived']),
+    body('is_published').optional().isBoolean(),
   ],
   validate,
   async (req, res) => {
     try {
-      const { year, regionId } = req.params;
-      const updated = await adminService.upsertArchiveRegionDetails(
-        req.user.id,
-        year,
-        regionId,
-        req.body
-      );
-      return sendSuccess(res, { details: updated });
+      const updated = await adminService.updateArchiveYear(req.user.id, req.params.year, req.body);
+      return sendSuccess(res, updated);
     } catch (err) {
-      console.error('Admin upsertArchiveRegionDetails error:', err);
-      return sendError(res, 'Failed to update region details overlay', 500);
+      console.error('Admin updateArchiveYear error:', err);
+      return sendError(res, err.message || 'Failed to update archive year', 400);
     }
   }
 );
 
-/**
- * GET /api/admin/library
- * Query all library audio/video items.
- */
+router.delete(
+  '/archive/years/:year',
+  [param('year').isInt({ min: 0 }).toInt()],
+  validate,
+  async (req, res) => {
+    try {
+      const deleted = await adminService.deleteArchiveYear(req.user.id, req.params.year);
+      return sendSuccess(res, deleted);
+    } catch (err) {
+      console.error('Admin deleteArchiveYear error:', err);
+      return sendError(res, err.message || 'Failed to delete archive year', 400);
+    }
+  }
+);
+
+router.post(
+  '/archive/years/:year/duplicate',
+  [
+    param('year').isInt({ min: 0 }).toInt(),
+    body('target_year').isInt({ min: 0, max: 9999 }).toInt(),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const duplicated = await adminService.duplicateArchiveYear(req.user.id, req.params.year, req.body.target_year);
+      return sendSuccess(res, duplicated, 201);
+    } catch (err) {
+      console.error('Admin duplicateArchiveYear error:', err);
+      return sendError(res, err.message || 'Failed to duplicate archive year', 400);
+    }
+  }
+);
+
+router.post('/archive/years/:year/publish', [param('year').isInt({ min: 0 }).toInt()], validate, async (req, res) => {
+  try {
+    const updated = await adminService.publishArchiveYear(req.user.id, req.params.year);
+    return sendSuccess(res, updated);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to publish archive year', 400);
+  }
+});
+
+router.post('/archive/years/:year/unpublish', [param('year').isInt({ min: 0 }).toInt()], validate, async (req, res) => {
+  try {
+    const updated = await adminService.unpublishArchiveYear(req.user.id, req.params.year);
+    return sendSuccess(res, updated);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to unpublish archive year', 400);
+  }
+});
+
+router.post('/archive/years/:year/archive', [param('year').isInt({ min: 0 }).toInt()], validate, async (req, res) => {
+  try {
+    const updated = await adminService.archiveArchiveYear(req.user.id, req.params.year);
+    return sendSuccess(res, updated);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to archive year', 400);
+  }
+});
+
+// ── NATIONS / REGIONS / LEADERS / EVENTS CRUD ───────────────────────────
+
+// Nations
+router.post('/archive/years/:year/nations', [param('year').isInt({ min: 0 }).toInt()], validate, async (req, res) => {
+  try {
+    const data = await adminService.createNation(req.user.id, req.params.year, req.body);
+    return sendSuccess(res, data, 201);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to create nation', 400);
+  }
+});
+
+router.put('/archive/years/:year/nations/:id', [param('year').isInt({ min: 0 }).toInt(), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.updateNation(req.user.id, req.params.year, req.params.id, req.body);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to update nation', 400);
+  }
+});
+
+router.delete('/archive/years/:year/nations/:id', [param('year').isInt({ min: 0 }).toInt(), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.deleteNation(req.user.id, req.params.year, req.params.id);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to delete nation', 400);
+  }
+});
+
+// Regions
+router.post('/archive/years/:year/regions', [param('year').isInt({ min: 0 }).toInt()], validate, async (req, res) => {
+  try {
+    const data = await adminService.createRegion(req.user.id, req.params.year, req.body);
+    return sendSuccess(res, data, 201);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to create region', 400);
+  }
+});
+
+router.put('/archive/years/:year/regions/:id', [param('year').isInt({ min: 0 }).toInt(), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.updateRegion(req.user.id, req.params.year, req.params.id, req.body);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to update region', 400);
+  }
+});
+
+router.delete('/archive/years/:year/regions/:id', [param('year').isInt({ min: 0 }).toInt(), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.deleteRegion(req.user.id, req.params.year, req.params.id);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to delete region', 400);
+  }
+});
+
+// Leaders
+router.post('/archive/years/:year/leaders', [param('year').isInt({ min: 0 }).toInt()], validate, async (req, res) => {
+  try {
+    const data = await adminService.createLeader(req.user.id, req.params.year, req.body);
+    return sendSuccess(res, data, 201);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to create leader', 400);
+  }
+});
+
+router.put('/archive/years/:year/leaders/:id', [param('year').isInt({ min: 0 }).toInt(), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.updateLeader(req.user.id, req.params.year, req.params.id, req.body);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to update leader', 400);
+  }
+});
+
+router.delete('/archive/years/:year/leaders/:id', [param('year').isInt({ min: 0 }).toInt(), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.deleteLeader(req.user.id, req.params.year, req.params.id);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to delete leader', 400);
+  }
+});
+
+// Events
+router.post('/archive/years/:year/events', [param('year').isInt({ min: 0 }).toInt()], validate, async (req, res) => {
+  try {
+    const data = await adminService.createEvent(req.user.id, req.params.year, req.body);
+    return sendSuccess(res, data, 201);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to create event', 400);
+  }
+});
+
+router.put('/archive/years/:year/events/:id', [param('year').isInt({ min: 0 }).toInt(), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.updateEvent(req.user.id, req.params.year, req.params.id, req.body);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to update event', 400);
+  }
+});
+
+router.delete('/archive/years/:year/events/:id', [param('year').isInt({ min: 0 }).toInt(), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.deleteEvent(req.user.id, req.params.year, req.params.id);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to delete event', 400);
+  }
+});
+
+// Tabs
+router.put('/archive/years/:year/tabs', [param('year').isInt({ min: 0 }).toInt(), body('tabs').isArray()], validate, async (req, res) => {
+  try {
+    const data = await adminService.upsertTabs(req.user.id, req.params.year, req.body.tabs);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to update tabs', 400);
+  }
+});
+
+// Entity Details
+router.put('/archive/years/:year/entities/:type/:id/details', [param('year').isInt({ min: 0 }).toInt(), param('type').isIn(['region', 'nation', 'leader']), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.upsertEntityDetails(req.user.id, req.params.year, req.params.type, req.params.id, req.body);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to update entity details', 400);
+  }
+});
+
+// Metrics
+router.post('/archive/years/:year/entities/:type/:id/metrics', [param('year').isInt({ min: 0 }).toInt(), param('type').isIn(['region', 'nation', 'leader']), param('id').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.createMetric(req.user.id, req.params.year, req.params.type, req.params.id, req.body);
+    return sendSuccess(res, data, 201);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to create metric', 400);
+  }
+});
+
+router.put('/archive/years/:year/metrics/:metricId', [param('year').isInt({ min: 0 }).toInt(), param('metricId').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.updateMetric(req.user.id, req.params.year, req.params.metricId, req.body);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to update metric', 400);
+  }
+});
+
+router.delete('/archive/years/:year/metrics/:metricId', [param('year').isInt({ min: 0 }).toInt(), param('metricId').isUUID()], validate, async (req, res) => {
+  try {
+    const data = await adminService.deleteMetric(req.user.id, req.params.year, req.params.metricId);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to delete metric', 400);
+  }
+});
+
+router.put('/archive/years/:year/metrics/:metricId/series', [param('year').isInt({ min: 0 }).toInt(), param('metricId').isUUID(), body('series').isArray()], validate, async (req, res) => {
+  try {
+    const data = await adminService.upsertMetricSeries(req.user.id, req.params.metricId, req.body.series);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to update metric series', 400);
+  }
+});
+
+// Reorder
+router.post('/archive/years/:year/reorder/:type', [param('year').isInt({ min: 0 }).toInt(), param('type').isIn(['nations', 'regions', 'leaders', 'events', 'metrics']), body('ordered_ids').isArray()], validate, async (req, res) => {
+  try {
+    const data = await adminService.reorderEntities(req.user.id, req.params.type, req.params.year, req.body.ordered_ids);
+    return sendSuccess(res, data);
+  } catch (err) {
+    return sendError(res, err.message || 'Failed to reorder entities', 400);
+  }
+});
+
+// ── LIBRARY & AUDIT LOGS ─────────────────────────────────────────────────
+
 router.get('/library', async (req, res) => {
   try {
     const items = await adminService.getLibraryItems();
@@ -406,10 +481,6 @@ router.get('/library', async (req, res) => {
   }
 });
 
-/**
- * POST /api/admin/library/:id/toggle-publish
- * Toggle publication state for a library item.
- */
 router.post(
   '/library/:id/toggle-publish',
   [param('id').isUUID().withMessage('Valid library item UUID required')],
@@ -418,13 +489,8 @@ router.post(
     try {
       const { id } = req.params;
       const updated = await adminService.toggleLibraryPublish(req.user.id, id);
-      if (!updated) {
-        return sendError(res, 'Library item not found', 404);
-      }
-      return sendSuccess(res, {
-        message: `Library item publication set to ${updated.is_published}`,
-        item: updated,
-      });
+      if (!updated) return sendError(res, 'Library item not found', 404);
+      return sendSuccess(res, { item: updated });
     } catch (err) {
       console.error('Admin toggleLibraryPublish error:', err);
       return sendError(res, 'Failed to update library publication status', 500);
@@ -432,10 +498,6 @@ router.post(
   }
 );
 
-/**
- * GET /api/admin/audit-logs
- * Query paginated audit log entries.
- */
 router.get(
   '/audit-logs',
   [

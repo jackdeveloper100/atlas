@@ -3,17 +3,10 @@
 /**
  * tests/archive-routes.test.js
  *
- * Archive route logic tests (Phase 5.5 — Archive completion) — success paths,
- * 404s, and filter validation, complementing the auth-gating smoke tests in
- * archive.test.js.
- *
- * Mounts the real archive.routes.js router with authenticate/requireSubscription
- * /archive.service mocked via jest.mock — same technique as
- * library-routes.test.js. Kept in its own file because jest.mock is
- * file-scoped/hoisted.
+ * Archive route logic tests with mocked service layer.
  */
 
-require('../src/config'); // loads .env before automocking introspects the real modules
+require('../src/config');
 
 const request = require('supertest');
 
@@ -81,128 +74,49 @@ describe('Archive Endpoints (mocked auth)', () => {
     });
   });
 
-  describe('GET /years/:year', () => {
+  describe('GET /:year', () => {
     it('rejects a non-numeric year with 400', async () => {
-      const res = await request(app).get('/api/archive/years/not-a-year');
+      const res = await request(app).get('/api/archive/not-a-year');
       expect(res.status).toBe(400);
-      expect(archiveService.getYearMetadata).not.toHaveBeenCalled();
+      expect(archiveService.getYear).not.toHaveBeenCalled();
     });
 
     it('returns 404 for an unpublished/missing year', async () => {
-      archiveService.getYearMetadata.mockResolvedValue({
+      archiveService.getYear.mockResolvedValue({
         success: false,
-        year: null,
+        data: null,
         error: null,
         notFound: true,
       });
 
-      const res = await request(app).get('/api/archive/years/9999');
+      const res = await request(app).get('/api/archive/9999');
 
       expect(res.status).toBe(404);
       expect(res.body.success).toBe(false);
     });
 
-    it('returns metadata for a published year', async () => {
-      archiveService.getYearMetadata.mockResolvedValue({
-        success: true,
-        year: { year: 5, is_published: true, schema_version: '1.0.0' },
-        error: null,
-        notFound: false,
-      });
-
-      const res = await request(app).get('/api/archive/years/5');
-
-      expect(res.status).toBe(200);
-      expect(res.body.data.year).toBe(5);
-    });
-  });
-
-  describe('GET /snapshot/:year', () => {
-    it('returns the full snapshot JSON unmodified with immutable cache headers', async () => {
-      const snapshot = {
-        schema_version: '1.0.0',
-        simulation: { year: 0, quarter: 1 },
-        world: { totalPopulation: 100, nationCount: 1, regionCount: 1, leaderCount: 1, eventCount: 1 },
-        nations: [{ id: 'n1', name: 'Test Nation' }],
-        regions: [],
+    it('returns composed relational data for a published year', async () => {
+      const yearPayload = {
+        year: { year: 5, isPublished: true },
+        nations: [{ id: 'n1', name: 'Ashen Run' }],
+        regions: [{ id: 'r1', name: 'Amber Vale' }],
         leaders: [],
-        politicalStates: [],
         events: [],
+        tabs: [],
+        entities: {},
       };
-      archiveService.getSnapshot.mockResolvedValue({
+
+      archiveService.getYear.mockResolvedValue({
         success: true,
-        snapshot,
+        data: yearPayload,
         error: null,
         notFound: false,
       });
 
-      const res = await request(app).get('/api/archive/snapshot/0');
-
-      expect(res.status).toBe(200);
-      expect(res.body.data).toEqual(snapshot);
-      expect(res.headers['cache-control']).toContain('immutable');
-    });
-
-    it('returns 404 when the snapshot year is not published', async () => {
-      archiveService.getSnapshot.mockResolvedValue({
-        success: false,
-        snapshot: null,
-        error: null,
-        notFound: true,
-      });
-
-      const res = await request(app).get('/api/archive/snapshot/9999');
-
-      expect(res.status).toBe(404);
-      expect(res.body.success).toBe(false);
-    });
-  });
-
-  describe('GET /years/:year/nations', () => {
-    it('returns the nations index for a published year', async () => {
-      archiveService.getNationsForYear.mockResolvedValue({
-        success: true,
-        nations: [{ nation_id: 'kelkelia', name: 'Kelkelia', population: 500000, is_active: true }],
-        error: null,
-        notFound: false,
-      });
-
-      const res = await request(app).get('/api/archive/years/0/nations');
+      const res = await request(app).get('/api/archive/5');
 
       expect(res.status).toBe(200);
       expect(res.body.data.nations).toHaveLength(1);
-      expect(res.body.data.total).toBe(1);
-    });
-  });
-
-  describe('GET /years/:year/events', () => {
-    it('rejects an invalid event_type filter with 400', async () => {
-      const res = await request(app).get('/api/archive/years/0/events?event_type=bad space');
-      expect(res.status).toBe(400);
-      expect(archiveService.getEventsForYear).not.toHaveBeenCalled();
-    });
-
-    it('passes validated filters through to the service and returns paginated events', async () => {
-      archiveService.getEventsForYear.mockResolvedValue({
-        success: true,
-        events: [{ event_id: 'event-world-init', event_type: 'WORLD_INITIALIZED' }],
-        total: 1,
-        error: null,
-        notFound: false,
-      });
-
-      const res = await request(app).get(
-        '/api/archive/years/0/events?event_type=WORLD_INITIALIZED&nation_id=kelkelia&page=1&per_page=20'
-      );
-
-      expect(res.status).toBe(200);
-      expect(res.body.data.events).toHaveLength(1);
-      expect(archiveService.getEventsForYear).toHaveBeenCalledWith(0, {
-        event_type: 'WORLD_INITIALIZED',
-        nation_id: 'kelkelia',
-        page: 1,
-        per_page: 20,
-      });
     });
   });
 });
