@@ -12,12 +12,13 @@ import { usePlaybackPosition } from '../../hooks/usePlaybackPosition';
 import AudioPlayer from '../../components/library/AudioPlayer';
 import LockedState from '../../components/ui/LockedState';
 
-function getYouTubeEmbedUrl(url) {
-  if (!url || typeof url !== 'string') return null;
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-  const match = url.match(regExp);
-  return match && match[2].length === 11 ? `https://www.youtube.com/embed/${match[2]}` : null;
-}
+// Video / YouTube helper commented out for audio-only mode:
+// function getYouTubeEmbedUrl(url) {
+//   if (!url || typeof url !== 'string') return null;
+//   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+//   const match = url.match(regExp);
+//   return match && match[2].length === 11 ? `https://www.youtube.com/embed/${match[2]}` : null;
+// }
 
 function LibraryItemPage() {
   const { id } = useParams();
@@ -32,6 +33,7 @@ function LibraryItemPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [requiresSubscription, setRequiresSubscription] = useState(false);
+  const [imageError, setImageError] = useState(false);
   const [videoError, setVideoError] = useState(false);
 
   useEffect(() => {
@@ -41,6 +43,7 @@ function LibraryItemPage() {
       setLoading(true);
       setError(null);
       setRequiresSubscription(false);
+      setImageError(false);
       videoSeekedRef.current = false;
 
       try {
@@ -60,7 +63,6 @@ function LibraryItemPage() {
         setItem(itemRes.data);
         setInitialPosition(savedPosition || 0);
         lastKnownTimeRef.current = savedPosition || 0;
-        setVideoError(false);
 
         if (streamRes.success) {
           setStreamUrl(streamRes.data.url);
@@ -134,9 +136,13 @@ function LibraryItemPage() {
   }
 
   const meta = item?.metadata || {};
-  const mediaSrc = streamUrl || meta.audio_url;
-  const isVideo = item?.item_type === 'video' || (mediaSrc && (mediaSrc.includes('youtu.be') || mediaSrc.includes('youtube.com') || mediaSrc.endsWith('.mp4') || mediaSrc.endsWith('.webm')));
-  const ytEmbedUrl = getYouTubeEmbedUrl(mediaSrc);
+  const DEFAULT_AUDIO_STREAM = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+  const mediaSrc = (streamUrl && typeof streamUrl === 'string' && (streamUrl.startsWith('http://') || streamUrl.startsWith('https://') || streamUrl.startsWith('/')))
+    ? streamUrl
+    : (meta.audio_url && typeof meta.audio_url === 'string' && (meta.audio_url.startsWith('http://') || meta.audio_url.startsWith('https://') || meta.audio_url.startsWith('/')))
+      ? meta.audio_url
+      : DEFAULT_AUDIO_STREAM;
+
   const durationFmt = Number.isFinite(item?.duration_seconds) && item.duration_seconds > 0
     ? `${Math.floor(item.duration_seconds / 60)}m`
     : '0m';
@@ -163,7 +169,7 @@ function LibraryItemPage() {
         {!loading && requiresSubscription && (
           <LockedState
             title="ATLAS PRO SUBSCRIBER FEATURE"
-            description="Audio & Video narratives are exclusively available to active ATLAS subscribers."
+            description="Audio narratives are exclusively available to active ATLAS subscribers."
             buttonText="Upgrade to Pro"
             redirectPath="/pricing"
           />
@@ -182,54 +188,24 @@ function LibraryItemPage() {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
               {/* Left Column: Main Media Box */}
               <div className="lg:col-span-7">
-                {ytEmbedUrl ? (
-                  /* Case 1: YouTube Video Embed */
-                  <div className="w-full aspect-video rounded-2xl overflow-hidden border border-rule shadow-md bg-black">
-                    <iframe
-                      src={ytEmbedUrl}
-                      title={item.title}
-                      className="w-full h-full border-0"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    />
-                  </div>
-                ) : isVideo && mediaSrc && !videoError ? (
-                  /* Case 2: Uploaded / Direct Video File (HTML5 Video Player) */
-                  <div className="w-full aspect-video rounded-2xl overflow-hidden border border-rule shadow-md bg-black flex items-center justify-center">
-                    <video
-                      ref={videoRef}
-                      src={mediaSrc}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      onLoadedMetadata={handleVideoLoadedMetadata}
-                      onTimeUpdate={handleVideoTimeUpdate}
-                      onPause={handleVideoPause}
-                      onEnded={handleVideoPause}
-                      onError={handleVideoError}
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
-                ) : isVideo && mediaSrc && videoError ? (
-                  /* Case 2b: Video failed to load — graceful fallback instead of a broken/blank player */
-                  <div className="w-full aspect-video rounded-2xl border border-rule shadow-md bg-ground flex flex-col items-center justify-center gap-2 text-ink/60 p-8 text-center">
-                    <AlertCircle size={28} aria-hidden="true" />
-                    <span className="text-sm font-medium">Couldn&apos;t load this video. Please try again later.</span>
-                  </div>
-                ) : meta.cover_image_url ? (
-                  /* Case 3: Audio Item with Cover Image Artwork */
+                {/* Video / YouTube player blocks commented out for audio-only mode:
+                {ytEmbedUrl ? ( ... ) : isVideo ? ( ... ) : ...}
+                */}
+                {meta.cover_image_url && !imageError ? (
+                  /* Audio Item with Cover Image Artwork */
                   <div className="w-full aspect-square sm:aspect-[1.1/1] bg-[#D9D9D9] border border-rule rounded-2xl overflow-hidden shadow-2xs relative">
                     <img
                       src={meta.cover_image_url}
                       alt={item.title}
+                      onError={() => setImageError(true)}
                       className="w-full h-full object-cover"
                     />
                   </div>
                 ) : (
-                  /* Case 4: Audio Item Default Media Box Placeholder */
+                  /* Audio Item Default Media Box Placeholder */
                   <div className="w-full aspect-square sm:aspect-[1.1/1] bg-[#D9D9D9] border border-rule rounded-2xl flex items-center justify-center p-8 shadow-2xs">
                     <div className="w-20 h-20 rounded-full bg-paper border border-rule flex items-center justify-center text-ink/60 shadow-xs">
-                      {isVideo ? <Video size={36} /> : <Headphones size={36} />}
+                      <Headphones size={36} />
                     </div>
                   </div>
                 )}
@@ -252,7 +228,8 @@ function LibraryItemPage() {
                   )}
 
                   <div className="font-mono text-[11px] uppercase font-bold text-ink/50 mt-2 tracking-wider">
-                    {isVideo ? 'VIDEO RECORD' : 'AUDIO RECORD'}
+                    {/* Video option commented out: isVideo ? 'VIDEO RECORD' : 'AUDIO RECORD' */}
+                    AUDIO RECORD
                   </div>
                 </div>
 
@@ -263,16 +240,14 @@ function LibraryItemPage() {
                 )}
 
                 {/* Render Audio Player for Audio Tracks */}
-                {!isVideo && !ytEmbedUrl && (
-                  <div className="pt-2">
-                    <AudioPlayer
-                      src={mediaSrc}
-                      initialPositionSeconds={initialPosition}
-                      onProgress={handleProgress}
-                      onPause={handlePause}
-                    />
-                  </div>
-                )}
+                <div className="pt-2">
+                  <AudioPlayer
+                    src={mediaSrc}
+                    initialPositionSeconds={initialPosition}
+                    onProgress={handleProgress}
+                    onPause={handlePause}
+                  />
+                </div>
               </div>
             </div>
 

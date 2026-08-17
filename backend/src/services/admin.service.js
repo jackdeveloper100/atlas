@@ -54,6 +54,39 @@ class AdminService {
   }
 
   /**
+   * Get paginated subscriptions list
+   */
+  async getSubscriptions({ page = 1, limit = 20, status = '' }) {
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+    const offset = (pageNum - 1) * limitNum;
+
+    let query = supabase
+      .from('subscriptions')
+      .select('*, profiles(id, display_name)', { count: 'exact' });
+
+    if (status && status.trim() !== '') {
+      query = query.eq('status', status.trim());
+    }
+
+    query = query.order('created_at', { ascending: false }).range(offset, offset + limitNum - 1);
+
+    const { data: subscriptions, count, error } = await query;
+    if (error) throw error;
+
+    const totalCount = count || 0;
+    const totalPages = Math.ceil(totalCount / limitNum) || 1;
+
+    return {
+      subscriptions: subscriptions || [],
+      total_count: totalCount,
+      total_pages: totalPages,
+      page: pageNum,
+      limit: limitNum,
+    };
+  }
+
+  /**
    * Get paginated user accounts list
    */
   async getUsers({ page = 1, limit = 20, search = '' }) {

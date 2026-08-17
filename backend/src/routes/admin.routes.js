@@ -40,6 +40,29 @@ router.get('/stats', async (req, res) => {
 });
 
 /**
+ * GET /api/admin/subscriptions
+ */
+router.get(
+  '/subscriptions',
+  [
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+    query('status').optional().isString(),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { page = 1, limit = 15, status = '' } = req.query;
+      const result = await adminService.getSubscriptions({ page, limit, status });
+      return sendSuccess(res, result);
+    } catch (err) {
+      console.error('Admin getSubscriptions error:', err);
+      return sendError(res, 'Failed to fetch subscriptions', 500);
+    }
+  }
+);
+
+/**
  * GET /api/admin/users
  */
 router.get(

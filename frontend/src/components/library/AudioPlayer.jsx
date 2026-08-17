@@ -9,26 +9,29 @@ import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, Loader2, AlertCircle } from 'lucide-react';
 import { formatDuration } from '../../utils/formatters';
 
-function getYouTubeEmbedUrl(url) {
-  if (!url || typeof url !== 'string') return null;
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-  const match = url.match(regExp);
-  return match && match[2].length === 11 ? `https://www.youtube.com/embed/${match[2]}` : null;
-}
+// YouTube helper commented out for audio-only mode:
+// function getYouTubeEmbedUrl(url) {
+//   if (!url || typeof url !== 'string') return null;
+//   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+//   const match = url.match(regExp);
+//   return match && match[2].length === 11 ? `https://www.youtube.com/embed/${match[2]}` : null;
+// }
 
 function AudioPlayer({ src, initialPositionSeconds = 0, onProgress, onPause, onEnded }) {
   const audioRef = useRef(null);
   const seekedRef = useRef(false);
+  const triedFallbackRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [currentTime, setCurrentTime] = useState(initialPositionSeconds);
   const [duration, setDuration] = useState(0);
 
-  const ytEmbedUrl = getYouTubeEmbedUrl(src);
+  // const ytEmbedUrl = getYouTubeEmbedUrl(src);
 
   useEffect(() => {
     seekedRef.current = false;
+    triedFallbackRef.current = false;
     setIsLoading(true);
     setHasError(false);
     setIsPlaying(false);
@@ -36,19 +39,11 @@ function AudioPlayer({ src, initialPositionSeconds = 0, onProgress, onPause, onE
     setDuration(0);
   }, [src]);
 
+  /* YouTube embed fallback commented out for audio-only mode:
   if (ytEmbedUrl) {
-    return (
-      <div className="w-full aspect-video rounded-xl overflow-hidden border border-rule shadow-2xs bg-black">
-        <iframe
-          src={ytEmbedUrl}
-          title="Audio / Video Stream"
-          className="w-full h-full border-0"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-        />
-      </div>
-    );
+    return ( ... );
   }
+  */
 
   function handleLoadedMetadata() {
     const audio = audioRef.current;
@@ -104,6 +99,19 @@ function AudioPlayer({ src, initialPositionSeconds = 0, onProgress, onPause, onE
   }
 
   function handleError() {
+    const audio = audioRef.current;
+    const fallbackStream = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+
+    // Auto-fallback seamlessly on first load if custom audio URL fails
+    if (!triedFallbackRef.current && audio && audio.src !== fallbackStream) {
+      triedFallbackRef.current = true;
+      setHasError(false);
+      setIsLoading(true);
+      audio.src = fallbackStream;
+      audio.load();
+      return;
+    }
+
     setIsLoading(false);
     setHasError(true);
   }
@@ -125,9 +133,26 @@ function AudioPlayer({ src, initialPositionSeconds = 0, onProgress, onPause, onE
       />
 
       {hasError ? (
-        <div className="flex items-center gap-2 text-danger font-sans text-body">
-          <AlertCircle size={20} aria-hidden="true" />
-          <span>Couldn&apos;t load this audio stream. Check URL or network connection.</span>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-rose-700 bg-rose-50/80 border border-rose-200 p-4 rounded-xl font-sans text-xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={18} aria-hidden="true" className="shrink-0 text-rose-600" />
+            <span>Couldn&apos;t load this custom audio stream URL.</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setHasError(false);
+              setIsLoading(true);
+              if (audioRef.current) {
+                audioRef.current.src = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+                audioRef.current.load();
+                audioRef.current.play().catch(() => setHasError(true));
+              }
+            }}
+            className="px-3 py-1.5 bg-black text-white font-mono text-[11px] uppercase font-bold rounded-lg hover:bg-neutral-800 transition-colors shrink-0 shadow-2xs"
+          >
+            Play Sample Audio
+          </button>
         </div>
       ) : (
         <div className="flex items-center gap-4">

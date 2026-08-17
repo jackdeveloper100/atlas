@@ -32,6 +32,23 @@ import { useToast } from '../../components/ui/Toast';
 
 const CATEGORIES = ['Overview', 'Political', 'Economy', 'Health', 'Law'];
 
+function TableItemThumbnail({ coverUrl, title }) {
+  const [imgErr, setImgErr] = useState(false);
+
+  if (coverUrl && typeof coverUrl === 'string' && coverUrl.startsWith('http') && !imgErr) {
+    return (
+      <img
+        src={coverUrl}
+        alt={title}
+        onError={() => setImgErr(true)}
+        className="w-full h-full object-cover rounded-lg"
+      />
+    );
+  }
+
+  return <Headphones className="w-5 h-5 text-ink/60" />;
+}
+
 export default function AdminLibraryPage() {
   const { addToast } = useToast();
 
@@ -92,10 +109,10 @@ export default function AdminLibraryPage() {
     setDescription('');
     setCategory('Political');
     setItemType('audio');
-    setAudioUrl('');
+    setAudioUrl('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3');
     setCoverImageUrl('');
     setDurationSeconds(300);
-    setIsPublished(false);
+    setIsPublished(true);
     setUploadedStoragePath('');
     setUploadedFileName('');
     setIsModalOpen(true);
@@ -243,8 +260,9 @@ export default function AdminLibraryPage() {
     const total = items.length;
     const published = items.filter((i) => i.is_published).length;
     const drafts = items.filter((i) => !i.is_published).length;
-    const videos = items.filter((i) => i.item_type === 'video').length;
-    return { total, published, drafts, videos };
+    const audio = items.filter((i) => i.item_type === 'audio' || !i.item_type).length;
+    // const videos = items.filter((i) => i.item_type === 'video').length;
+    return { total, published, drafts, audio };
   }, [items]);
 
   // Filtered List
@@ -273,9 +291,9 @@ export default function AdminLibraryPage() {
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-display font-bold text-ink">Audio & Video Library CMS</h1>
+          <h1 className="text-2xl sm:text-3xl font-display font-bold text-ink">Audio Library CMS</h1>
           <p className="text-xs sm:text-sm text-ink/60 mt-1">
-            Create, edit, and publish subscriber audio narratives and video recordings for ATLAS main subscribers.
+            Create, edit, and publish subscriber audio narratives for ATLAS main subscribers.
           </p>
         </div>
 
@@ -318,11 +336,11 @@ export default function AdminLibraryPage() {
 
         <div className="bg-paper p-4 rounded-xl border border-rule shadow-2xs flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-700">
-            <Video className="w-5 h-5" />
+            <Headphones className="w-5 h-5" />
           </div>
           <div>
-            <div className="text-xs font-mono uppercase text-ink/50 font-bold">Video Tracks</div>
-            <div className="text-xl font-bold font-mono text-blue-700 mt-0.5">{stats.videos}</div>
+            <div className="text-xs font-mono uppercase text-ink/50 font-bold">Audio Tracks</div>
+            <div className="text-xl font-bold font-mono text-blue-700 mt-0.5">{stats.audio}</div>
           </div>
         </div>
       </div>
@@ -403,18 +421,8 @@ export default function AdminLibraryPage() {
                     <tr key={item.id} className="hover:bg-ground/40 transition-colors">
                       <td className="py-3.5 px-4 max-w-sm">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-ground border border-rule flex items-center justify-center shrink-0 text-ink/70">
-                            {meta.cover_image_url ? (
-                              <img
-                                src={meta.cover_image_url}
-                                alt={item.title}
-                                className="w-full h-full object-cover rounded-lg"
-                              />
-                            ) : item.item_type === 'video' ? (
-                              <Video className="w-5 h-5 text-ink/60" />
-                            ) : (
-                              <Headphones className="w-5 h-5 text-ink/60" />
-                            )}
+                          <div className="w-10 h-10 rounded-lg bg-ground border border-rule flex items-center justify-center shrink-0 text-ink/70 overflow-hidden">
+                            <TableItemThumbnail coverUrl={meta.cover_image_url} title={item.title} />
                           </div>
                           <div className="min-w-0">
                             <div className="font-sans font-bold text-ink truncate">{item.title}</div>
@@ -433,7 +441,8 @@ export default function AdminLibraryPage() {
 
                       <td className="py-3.5 px-4">
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold uppercase tracking-wider bg-black/5 text-ink border border-rule">
-                          {item.item_type === 'video' ? 'VIDEO RECORD' : 'AUDIO RECORD'}
+                          {/* Video option commented out: item.item_type === 'video' ? 'VIDEO RECORD' : 'AUDIO RECORD' */}
+                          AUDIO RECORD
                         </span>
                       </td>
 
@@ -536,7 +545,9 @@ export default function AdminLibraryPage() {
                       className="w-full text-xs font-mono p-2.5 bg-paper border border-rule rounded-lg text-ink uppercase"
                     >
                       <option value="audio">Audio Record</option>
+                      {/* Video option commented out for now:
                       <option value="video">Video Record</option>
+                      */}
                     </select>
                   </div>
                 </div>
@@ -556,18 +567,18 @@ export default function AdminLibraryPage() {
                 <div className="space-y-3 bg-ground/50 p-3 rounded-xl border border-rule">
                   <div>
                     <label className="block text-xs font-mono font-bold uppercase text-ink/70 mb-1 flex items-center gap-1.5">
-                      <Link2 className="w-3.5 h-3.5 text-ink" /> Audio / Video Stream URL (or YouTube URL)
+                      <Link2 className="w-3.5 h-3.5 text-ink" /> Audio Stream URL
                     </label>
                     <Input
                       value={audioUrl}
                       onChange={(e) => setAudioUrl(e.target.value)}
-                      placeholder="https://youtu.be/D0UnqGm_miA or audio stream URL"
+                      placeholder="Audio stream URL (e.g. MP3 / AAC direct link)"
                     />
                   </div>
 
                   <div className="relative">
                     <label className="block text-xs font-mono font-bold uppercase text-ink/70 mb-1 flex items-center gap-1.5">
-                      <Upload className="w-3.5 h-3.5 text-ink" /> Or Upload Media File
+                      <Upload className="w-3.5 h-3.5 text-ink" /> Or Upload Audio File
                       {uploadingFile && (
                         <span className="inline-flex items-center text-xs text-blue-600 font-normal ml-auto">
                           <RefreshCw className="w-3 h-3 animate-spin mr-1" /> Uploading to storage...
@@ -576,7 +587,7 @@ export default function AdminLibraryPage() {
                     </label>
                     <input
                       type="file"
-                      accept={itemType === 'video' ? 'video/*' : 'audio/*'}
+                      accept="audio/*"
                       disabled={uploadingFile}
                       onChange={handleFileUpload}
                       className="w-full text-xs font-sans p-1.5 bg-paper border border-rule rounded-lg text-ink file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-black file:text-white hover:file:bg-neutral-800 cursor-pointer disabled:opacity-50"
