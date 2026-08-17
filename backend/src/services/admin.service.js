@@ -14,33 +14,34 @@ class AdminService {
    * Get overall system dashboard metrics
    */
   async getDashboardStats() {
-    const { count: totalUsers, error: usersError } = await supabase
-      .from('profiles')
-      .select('id', { count: 'exact', head: true });
+    const [
+      { count: totalUsers, error: usersError },
+      { count: activeSubscribers, error: subError },
+      { count: publishedSnapshots, error: snapError },
+      { count: totalLibraryItems, error: libError },
+      { data: recentAuditLogs, error: auditError },
+    ] = await Promise.all([
+      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+      supabase
+        .from('subscriptions')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['active', 'trialing']),
+      supabase
+        .from('archive_years')
+        .select('year', { count: 'exact', head: true })
+        .or('is_published.eq.true,status.eq.published'),
+      supabase.from('library_items').select('id', { count: 'exact', head: true }),
+      supabase
+        .from('audit_log')
+        .select('id, user_id, event_type, metadata, created_at')
+        .order('created_at', { ascending: false })
+        .limit(5),
+    ]);
+
     if (usersError) throw usersError;
-
-    const { count: activeSubscribers, error: subError } = await supabase
-      .from('subscriptions')
-      .select('id', { count: 'exact', head: true })
-      .in('status', ['active', 'trialing']);
     if (subError) throw subError;
-
-    const { count: publishedSnapshots, error: snapError } = await supabase
-      .from('archive_years')
-      .select('year', { count: 'exact', head: true })
-      .or('is_published.eq.true,status.eq.published');
     if (snapError) throw snapError;
-
-    const { count: totalLibraryItems, error: libError } = await supabase
-      .from('library_items')
-      .select('id', { count: 'exact', head: true });
     if (libError) throw libError;
-
-    const { data: recentAuditLogs, error: auditError } = await supabase
-      .from('audit_log')
-      .select('id, user_id, event_type, metadata, created_at')
-      .order('created_at', { ascending: false })
-      .limit(5);
     if (auditError) throw auditError;
 
     return {
@@ -1014,7 +1015,138 @@ class AdminService {
     return items || [];
   }
 
+  async createLibraryItem(adminUserId, itemData) {
+    const validAdminId = await this._resolveValidAdminId(adminUserId);
+    const {
+      title,
+      description = '',
+      item_type = 'audio',
+      storage_path,
+      duration_seconds = 0,
+      metadata = {},
+      is_published = false,
+    } = itemData;
+
+    const randomSuffix = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const autoPath =
+      storage_path && storage_path.trim()
+        ? storage_path.trim()
+        : `library/media-${randomSuffix}.${item_type === 'video' ? 'mp4' : 'mp3'}`;
+
+    const { data, error } = await supabase
+      .from('library_items')
+      .insert({
+        title,
+        description,
+        item_type,
+        storage_path: autoPath,
+        duration_seconds: duration_seconds ? Number(duration_seconds) : null,
+        metadata: {
+          category: metadata.category || 'Political',
+          subtitle: metadata.subtitle || '',
+          cover_image_url: metadata.cover_image_url || '',
+          related_item_ids: metadata.related_item_ids || [],
+          audio_url: metadata.audio_url || '',
+        },
+        is_published: !!is_published,
+        published_at: is_published ? new Date().toISOString() : null,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    await logAuditEvent(validAdminId, 'admin_library_toggle', {
+      item_id: data.id,
+      title: data.title,
+    });
+
+    return data;
+  }
+
+  async updateLibraryItem(adminUserId, itemId, itemData) {
+    const validAdminId = await this._resolveValidAdminId(adminUserId);
+    const { data: existing, error: fetchErr } = await supabase
+      .from('library_items')
+      .select('*')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!existing) return null;
+
+    const updatedMetadata = {
+      ...(existing.metadata || {}),
+      ...(itemData.metadata || {}),
+    };
+
+    const updatePayload = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (itemData.title !== undefined) updatePayload.title = itemData.title;
+    if (itemData.description !== undefined) updatePayload.description = itemData.description;
+    if (itemData.item_type !== undefined) updatePayload.item_type = itemData.item_type;
+    if (itemData.storage_path !== undefined && itemData.storage_path.trim()) {
+      updatePayload.storage_path = itemData.storage_path.trim();
+    }
+    if (itemData.duration_seconds !== undefined)
+      updatePayload.duration_seconds = itemData.duration_seconds ? Number(itemData.duration_seconds) : null;
+    if (itemData.metadata !== undefined) updatePayload.metadata = updatedMetadata;
+    if (itemData.is_published !== undefined) {
+      updatePayload.is_published = !!itemData.is_published;
+      if (itemData.is_published && !existing.published_at) {
+        updatePayload.published_at = new Date().toISOString();
+      } else if (!itemData.is_published) {
+        updatePayload.published_at = null;
+      }
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('library_items')
+      .update(updatePayload)
+      .eq('id', itemId)
+      .select()
+      .single();
+
+    if (updateErr) throw updateErr;
+
+    await logAuditEvent(validAdminId, 'admin_library_toggle', {
+      item_id: itemId,
+      updated_fields: Object.keys(updatePayload),
+    });
+
+    return updated;
+  }
+
+  async deleteLibraryItem(adminUserId, itemId) {
+    const validAdminId = await this._resolveValidAdminId(adminUserId);
+    const { data: existing, error: fetchErr } = await supabase
+      .from('library_items')
+      .select('id, title')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (fetchErr) throw fetchErr;
+    if (!existing) return false;
+
+    const { error: deleteErr } = await supabase
+      .from('library_items')
+      .delete()
+      .eq('id', itemId);
+
+    if (deleteErr) throw deleteErr;
+
+    await logAuditEvent(validAdminId, 'admin_library_toggle', {
+      item_id: itemId,
+      title: existing.title,
+    });
+
+    return true;
+  }
+
   async toggleLibraryPublish(adminUserId, itemId) {
+    const validAdminId = await this._resolveValidAdminId(adminUserId);
     const { data: current, error: fetchErr } = await supabase
       .from('library_items')
       .select('id, is_published')
@@ -1037,7 +1169,7 @@ class AdminService {
 
     if (updateErr) throw updateErr;
 
-    await logAuditEvent(adminUserId, 'admin_library_toggle', {
+    await logAuditEvent(validAdminId, 'admin_library_toggle', {
       item_id: itemId,
       is_published: newPublishState,
     });

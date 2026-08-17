@@ -11,8 +11,15 @@ const { body, param, query } = require('express-validator');
 const authenticate = require('../middleware/authenticate');
 const requireAdmin = require('../middleware/requireAdmin');
 const validate = require('../middleware/validate');
-const { sendSuccess, sendError } = require('../utils/response');
+const multer = require('multer');
 const adminService = require('../services/admin.service');
+const storageService = require('../services/storage.service');
+const { sendSuccess, sendError } = require('../utils/response');
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
+});
 
 const router = express.Router();
 
@@ -480,6 +487,125 @@ router.get('/library', async (req, res) => {
     return sendError(res, 'Failed to fetch library items', 500);
   }
 });
+
+router.post(
+  '/library/upload',
+  (req, res, next) => {
+    upload.single('file')(req, res, (err) => {
+      if (err) {
+        if (err instanceof multer.MulterError) {
+          return sendError(res, `File upload error: ${err.message}`, 400);
+        }
+        return sendError(res, err.message || 'File upload failed', 400);
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return sendError(res, 'No media file provided', 400);
+      }
+
+      const itemType = req.body.item_type || 'audio';
+      const extMatch = req.file.originalname ? req.file.originalname.match(/\.([a-zA-Z0-9]+)$/) : null;
+      const ext = extMatch ? extMatch[1].toLowerCase() : (itemType === 'video' ? 'mp4' : 'mp3');
+      const uniquePath = `library/media-${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${ext}`;
+
+      const uploadRes = await storageService.uploadLibraryBuffer(
+        uniquePath,
+        req.file.buffer,
+        req.file.mimetype
+      );
+
+      if (!uploadRes.success) {
+        return sendError(res, uploadRes.error || 'Failed to save file to media storage', 500);
+      }
+
+      // The `library` bucket is private, so uploadRes.publicUrl never actually
+      // resolves for playback. storage_path is the permanent reference the
+      // frontend must persist; stream-url signs it fresh on every request.
+      // This preview_url is short-lived and only for the admin's immediate
+      // "did the upload work" feedback — it is never saved.
+      const previewRes = await storageService.generateSignedUrl(uploadRes.storagePath, 3600);
+
+      return sendSuccess(res, {
+        storage_path: uploadRes.storagePath,
+        preview_url: previewRes.success ? previewRes.signedUrl : null,
+        filename: req.file.originalname,
+      }, 201);
+    } catch (err) {
+      console.error('Admin uploadLibraryMedia error:', err);
+      return sendError(res, err.message || 'Failed to upload media file', 500);
+    }
+  }
+);
+
+router.post(
+  '/library',
+  [
+    body('title').isString().notEmpty().withMessage('Title is required'),
+    body('description').optional({ nullable: true }).isString(),
+    body('item_type').optional().isIn(['audio', 'video']),
+    body('storage_path').optional({ nullable: true }).isString(),
+    body('duration_seconds').optional({ nullable: true, checkFalsy: true }).toInt(),
+    body('metadata').optional().isObject(),
+    body('is_published').optional().isBoolean(),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const item = await adminService.createLibraryItem(req.user.id, req.body);
+      return sendSuccess(res, { item }, 201);
+    } catch (err) {
+      console.error('Admin createLibraryItem error:', err);
+      return sendError(res, err.message || 'Failed to create library item', 500);
+    }
+  }
+);
+
+router.put(
+  '/library/:id',
+  [
+    param('id').isUUID().withMessage('Valid library item UUID required'),
+    body('title').optional().isString(),
+    body('description').optional({ nullable: true }).isString(),
+    body('item_type').optional().isIn(['audio', 'video']),
+    body('storage_path').optional({ nullable: true }).isString(),
+    body('duration_seconds').optional({ nullable: true, checkFalsy: true }).toInt(),
+    body('metadata').optional().isObject(),
+    body('is_published').optional().isBoolean(),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updated = await adminService.updateLibraryItem(req.user.id, id, req.body);
+      if (!updated) return sendError(res, 'Library item not found', 404);
+      return sendSuccess(res, { item: updated });
+    } catch (err) {
+      console.error('Admin updateLibraryItem error:', err);
+      return sendError(res, err.message || 'Failed to update library item', 500);
+    }
+  }
+);
+
+router.delete(
+  '/library/:id',
+  [param('id').isUUID().withMessage('Valid library item UUID required')],
+  validate,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const success = await adminService.deleteLibraryItem(req.user.id, id);
+      if (!success) return sendError(res, 'Library item not found', 404);
+      return sendSuccess(res, { deleted: true });
+    } catch (err) {
+      console.error('Admin deleteLibraryItem error:', err);
+      return sendError(res, err.message || 'Failed to delete library item', 500);
+    }
+  }
+);
 
 router.post(
   '/library/:id/toggle-publish',

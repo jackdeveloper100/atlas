@@ -1,13 +1,13 @@
 /**
  * pages/library/LibraryPage.jsx
  *
- * Atlas Library Page layout matching Screenshot 2 reference design exactly.
- * Features a centered max-width container (~840px), 110px category sidebar with
- * "Political" active by default, 45px top spacing below header, and a 4-column product grid.
+ * Atlas Library Page layout matching Screenshot 2 & stripe.png reference design.
+ * Features a centered max-width container (~840px), category sidebar,
+ * dynamic filtering by category, and dynamic 4-column product grid created by admin.
  */
 
-import { useEffect, useState } from 'react';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { Loader2, AlertCircle, Headphones } from 'lucide-react';
 import { listItems } from '../../services/library.service';
 import LibraryGrid from '../../components/library/LibraryGrid';
 import LockedState from '../../components/ui/LockedState';
@@ -16,7 +16,7 @@ function LibraryPage() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selectedCategory, setSelectedCategory] = useState('Political');
+  const [selectedCategory, setSelectedCategory] = useState('Overview');
 
   const categories = ['Overview', 'Political', 'Economy', 'Health', 'Law'];
 
@@ -47,24 +47,14 @@ function LibraryPage() {
     };
   }, []);
 
-  // Always produce 12 product cards matching reference design
-  const rawItems = items.length >= 12
-    ? items.slice(0, 12)
-    : [
-      ...items,
-      ...Array.from({ length: 12 - items.length }, (_, i) => ({
-        id: `demo-${items.length + i + 1}`,
-        title: 'Product',
-        description: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed eu rhoncus nunc, at scelerisque velit.',
-        duration_seconds: null,
-      })),
-    ];
-
-  // Ensure 12 items with badge pattern matching Screenshot 2 (Col 1: no badge, Cols 2-4: badge)
-  const displayItems = rawItems.map((item, idx) => ({
-    ...item,
-    showBadge: (idx % 4) !== 0,
-  }));
+  // Filter items dynamically by category (Only dynamic items created by admin)
+  const categoryFilteredItems = useMemo(() => {
+    return items.filter((item) => {
+      if (selectedCategory === 'Overview') return true;
+      const cat = item.metadata?.category || 'Political';
+      return cat === selectedCategory;
+    });
+  }, [items, selectedCategory]);
 
   return (
     <div className="w-full bg-white min-h-screen">
@@ -78,10 +68,11 @@ function LibraryPage() {
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  className={`text-center text-xs font-medium px-3.5 py-2 transition-all shrink-0 ${isActive
-                    ? 'bg-black text-white font-semibold shadow-xs'
-                    : 'text-ink hover:bg-neutral-100'
-                    }`}
+                  className={`text-center text-xs font-medium px-3.5 py-2 transition-all shrink-0 ${
+                    isActive
+                      ? 'bg-black text-white font-semibold shadow-xs'
+                      : 'text-ink hover:bg-neutral-100'
+                  }`}
                 >
                   {cat}
                 </button>
@@ -89,7 +80,7 @@ function LibraryPage() {
             })}
           </aside>
 
-          {/* Product Area (4-column Grid) */}
+          {/* Dynamic Product Area */}
           <main className="flex-1 w-full min-w-0">
             {loading && (
               <div className="flex items-center gap-2 text-neutral-500 font-sans text-xs py-12 justify-center">
@@ -115,7 +106,19 @@ function LibraryPage() {
             )}
 
             {!loading && !error && (
-              <LibraryGrid items={displayItems} />
+              categoryFilteredItems.length > 0 ? (
+                <LibraryGrid items={categoryFilteredItems} />
+              ) : (
+                <div className="p-16 text-center border border-dashed border-rule rounded-2xl bg-ground/40 space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-paper border border-rule mx-auto flex items-center justify-center text-ink/40">
+                    <Headphones className="w-6 h-6" />
+                  </div>
+                  <h3 className="font-display text-lg font-bold text-ink">No Audio Tracks Available</h3>
+                  <p className="text-xs text-ink/60 max-w-sm mx-auto">
+                    There are no published audio tracks in the "{selectedCategory}" category yet.
+                  </p>
+                </div>
+              )
             )}
           </main>
         </div>
@@ -125,4 +128,3 @@ function LibraryPage() {
 }
 
 export default LibraryPage;
-

@@ -109,21 +109,48 @@ async function uploadLibraryMedia(storagePath, filePath, contentType) {
     }
 
     const fileBuffer = fs.readFileSync(filePath);
+    return await uploadLibraryBuffer(storagePath, fileBuffer, contentType);
+  } catch (err) {
+    return { success: false, storagePath: null, error: err.message };
+  }
+}
 
-    const { error } = await supabase.storage
+/**
+ * Upload a raw buffer (from Multer memoryStorage) into Supabase Storage
+ */
+async function uploadLibraryBuffer(storagePath, buffer, contentType) {
+  try {
+    let { error } = await supabase.storage
       .from(LIBRARY_BUCKET)
-      .upload(storagePath, fileBuffer, {
-        contentType,
+      .upload(storagePath, buffer, {
+        contentType: contentType || 'application/octet-stream',
         upsert: true,
       });
 
-    if (error) {
-      return { success: false, storagePath: null, error: error.message };
+    // If bucket restrictions reject the requested MIME type, fallback to application/octet-stream
+    if (error && error.message && error.message.toLowerCase().includes('mime type')) {
+      const fallback = await supabase.storage
+        .from(LIBRARY_BUCKET)
+        .upload(storagePath, buffer, {
+          contentType: 'application/octet-stream',
+          upsert: true,
+        });
+      error = fallback.error;
     }
 
-    return { success: true, storagePath, error: null };
+    if (error) {
+      return { success: false, storagePath: null, publicUrl: null, error: error.message };
+    }
+
+    const { data: pubData } = supabase.storage
+      .from(LIBRARY_BUCKET)
+      .getPublicUrl(storagePath);
+
+    const publicUrl = pubData?.publicUrl || null;
+
+    return { success: true, storagePath, publicUrl, error: null };
   } catch (err) {
-    return { success: false, storagePath: null, error: err.message };
+    return { success: false, storagePath: null, publicUrl: null, error: err.message };
   }
 }
 
@@ -142,7 +169,7 @@ async function generateSignedUrl(storagePath, ttlSeconds = LIBRARY_SIGNED_URL_TT
 
     return { success: true, signedUrl: data.signedUrl, error: null };
   } catch (err) {
-    return { success: false, signedUrl: null, error: error.message };
+    return { success: false, signedUrl: null, error: err.message };
   }
 }
 
@@ -171,6 +198,7 @@ module.exports = {
   generateArchiveMediaSignedUrl,
   deleteArchiveMedia,
   uploadLibraryMedia,
+  uploadLibraryBuffer,
   generateSignedUrl,
   deleteLibraryMedia,
 };

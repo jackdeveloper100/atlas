@@ -1,14 +1,20 @@
 /**
  * components/library/AudioPlayer.jsx
  *
- * Audio-only player (Phase 4 — video out of scope). Controlled by a signed
- * URL passed from the parent; reports progress upward so playback position
- * can be persisted, and seeks to a saved position on load.
+ * Audio & Video player for Library items.
+ * Supports HTML5 audio/video streams as well as direct YouTube URLs (e.g. https://youtu.be/...).
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, Loader2, AlertCircle } from 'lucide-react';
 import { formatDuration } from '../../utils/formatters';
+
+function getYouTubeEmbedUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = url.match(regExp);
+  return match && match[2].length === 11 ? `https://www.youtube.com/embed/${match[2]}` : null;
+}
 
 function AudioPlayer({ src, initialPositionSeconds = 0, onProgress, onPause, onEnded }) {
   const audioRef = useRef(null);
@@ -19,6 +25,8 @@ function AudioPlayer({ src, initialPositionSeconds = 0, onProgress, onPause, onE
   const [currentTime, setCurrentTime] = useState(initialPositionSeconds);
   const [duration, setDuration] = useState(0);
 
+  const ytEmbedUrl = getYouTubeEmbedUrl(src);
+
   useEffect(() => {
     seekedRef.current = false;
     setIsLoading(true);
@@ -26,8 +34,21 @@ function AudioPlayer({ src, initialPositionSeconds = 0, onProgress, onPause, onE
     setIsPlaying(false);
     setCurrentTime(initialPositionSeconds);
     setDuration(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
+
+  if (ytEmbedUrl) {
+    return (
+      <div className="w-full aspect-video rounded-xl overflow-hidden border border-rule shadow-2xs bg-black">
+        <iframe
+          src={ytEmbedUrl}
+          title="Audio / Video Stream"
+          className="w-full h-full border-0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
 
   function handleLoadedMetadata() {
     const audio = audioRef.current;
@@ -106,7 +127,7 @@ function AudioPlayer({ src, initialPositionSeconds = 0, onProgress, onPause, onE
       {hasError ? (
         <div className="flex items-center gap-2 text-danger font-sans text-body">
           <AlertCircle size={20} aria-hidden="true" />
-          <span>Couldn&apos;t load this audio. Try reloading the page.</span>
+          <span>Couldn&apos;t load this audio stream. Check URL or network connection.</span>
         </div>
       ) : (
         <div className="flex items-center gap-4">

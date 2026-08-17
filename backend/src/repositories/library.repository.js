@@ -19,25 +19,26 @@ const { supabase } = require('../services/supabase.service');
 // ── library_items ────────────────────────────────────────────────────────────
 
 /**
- * List published library items, optionally filtered by type, paginated.
+ * List published library items, optionally filtered by type/category, paginated.
  *
  * @param {object} filters
  * @param {string} [filters.item_type]
+ * @param {string} [filters.category]
  * @param {number} [filters.page]
  * @param {number} [filters.per_page]
  * @returns {Promise<{ data: object[]|null, total: number, error: string|null }>}
  */
 async function listPublishedItems(filters = {}) {
-  const { item_type, page = 1, per_page = 20 } = filters;
+  const { item_type, category, page = 1, per_page = 50 } = filters;
 
-  const safePerPage = Math.min(Math.max(1, parseInt(per_page, 10) || 20), 100);
+  const safePerPage = Math.min(Math.max(1, parseInt(per_page, 10) || 50), 100);
   const safePage = Math.max(1, parseInt(page, 10) || 1);
   const from = (safePage - 1) * safePerPage;
   const to = from + safePerPage - 1;
 
   let query = supabase
     .from('library_items')
-    .select('id, title, description, item_type, duration_seconds, metadata, published_at', {
+    .select('id, title, description, item_type, storage_path, duration_seconds, metadata, published_at, created_at', {
       count: 'exact',
     })
     .eq('is_published', true)
@@ -46,6 +47,10 @@ async function listPublishedItems(filters = {}) {
 
   if (item_type) {
     query = query.eq('item_type', item_type);
+  }
+
+  if (category && category !== 'All' && category !== 'Overview') {
+    query = query.eq('metadata->>category', category);
   }
 
   const { data, error, count } = await query;

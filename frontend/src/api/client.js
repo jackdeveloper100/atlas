@@ -4,43 +4,71 @@
  * Centralized Axios client for all API requests.
  * Automatically includes credentials and handles the API response envelope
  * format defined in DECISIONS.md.
- *
- * All backend routes return:
- *   { success: true, data: {...}, error: null }
- * or:
- *   { success: false, data: null, error: "message" }
- *
- * Usage in components:
- *   import api from '@/api/client';
- *   const response = await api.get('/health');
- *   if (response.success) { ... }
  */
 
 import axios from 'axios';
-import { supabase } from '../services/supabase';
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api';
 
 const client = axios.create({
   baseURL,
-  timeout: 15000,
+  timeout: 60000, // 60 seconds default API timeout
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// ── Request interceptor ──────────────────────────────────────────────────
-// Add Authorization header if a token exists in active Supabase session
-client.interceptors.request.use(
-  async (config) => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) {
-        config.headers.Authorization = `Bearer ${session.access_token}`;
+/**
+ * Fast synchronous check from localStorage to retrieve the active Supabase JWT access token.
+ * Completely avoids Supabase navigator lock deadlocks (navigator.locks.request) in browser tabs.
+ */
+function getStoredAccessToken() {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+
+    // Direct lookup for project auth token
+    const specificKey = 'sb-qcygciofjsmkdqsvillj-auth-token';
+    const specificItem = localStorage.getItem(specificKey);
+    if (specificItem) {
+      const parsed = JSON.parse(specificItem);
+      const token = parsed?.access_token || parsed?.currentSession?.access_token;
+      const expiresAt = parsed?.expires_at || parsed?.currentSession?.expires_at;
+      if (token && (!expiresAt || expiresAt * 1000 > Date.now())) {
+        return token;
       }
-    } catch (err) {
-      // Ignore session retrieval error if unauthenticated
+    }
+
+    // Fallback iteration across storage keys
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.includes('auth-token') || key.includes('supabase.auth.token'))) {
+        const item = localStorage.getItem(key);
+        if (item) {
+          const parsed = JSON.parse(item);
+          const token = parsed?.access_token || parsed?.currentSession?.access_token;
+          const expiresAt = parsed?.expires_at || parsed?.currentSession?.expires_at;
+          if (token && (!expiresAt || expiresAt * 1000 > Date.now())) {
+            return token;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    // Ignore storage parsing error
+  }
+  return null;
+}
+
+// ── Request interceptor ──────────────────────────────────────────────────
+// Add Authorization header if a token exists in active session
+client.interceptors.request.use(
+  (config) => {
+    if (!config.headers.Authorization) {
+      const fastToken = getStoredAccessToken();
+      if (fastToken) {
+        config.headers.Authorization = `Bearer ${fastToken}`;
+      }
     }
     return config;
   },

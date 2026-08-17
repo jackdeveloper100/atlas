@@ -75,11 +75,22 @@ async function generateStreamUrl(id) {
     return { success: false, url: null, expiresAt: null, error: null, notFound: true, notAudio: false };
   }
 
-  if (item.item_type !== 'audio') {
+  if (item.item_type !== 'audio' && item.item_type !== 'video') {
     return { success: false, url: null, expiresAt: null, error: null, notFound: false, notAudio: true };
   }
 
-  const { success, url, expiresAt, error } = await storageService.generateLibrarySignedUrl(item.storage_path);
+  if (item.metadata && item.metadata.audio_url) {
+    return {
+      success: true,
+      url: item.metadata.audio_url,
+      expiresAt: null,
+      error: null,
+      notFound: false,
+      notAudio: false,
+    };
+  }
+
+  const { success, url, expiresAt, error } = await storageService.generateSignedUrl(item.storage_path);
 
   if (!success) {
     return { success: false, url: null, expiresAt: null, error, notFound: false, notAudio: false };

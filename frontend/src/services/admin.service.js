@@ -163,6 +163,25 @@ export const adminService = {
     return await api.get('/admin/library');
   },
 
+  async uploadLibraryMedia(formData) {
+    return await api.post('/admin/library/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000, // 5 minutes timeout for media uploads
+    });
+  },
+
+  async createLibraryItem(payload) {
+    return await api.post('/admin/library', payload);
+  },
+
+  async updateLibraryItem(id, payload) {
+    return await api.put(`/admin/library/${id}`, payload);
+  },
+
+  async deleteLibraryItem(id) {
+    return await api.delete(`/admin/library/${id}`);
+  },
+
   async toggleLibraryPublish(id) {
     return await api.post(`/admin/library/${id}/toggle-publish`);
   },
