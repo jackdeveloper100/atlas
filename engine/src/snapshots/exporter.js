@@ -18,11 +18,13 @@ const fs = require('fs');
 const path = require('path');
 const { validateSnapshot } = require('./validator');
 
+const { buildDailyMapBundle } = require('../batch/mapBuilder');
+
 /**
  * Export world state as snapshot JSON
  * @param {World} world - World state to export
  * @param {string} outputDir - Output directory (default: data/snapshots)
- * @returns {object} { success: boolean, filePath: string, error: string | null, size: number }
+ * @returns {object} { success: boolean, filePath: string, mapPath: string | null, error: string | null, size: number }
  */
 function exportSnapshot(world, outputDir = null) {
   try {
@@ -46,6 +48,7 @@ function exportSnapshot(world, outputDir = null) {
       return {
         success: false,
         filePath: null,
+        mapPath: null,
         error: `Validation failed: ${validation.errors.join(', ')}`,
         size: 0
       };
@@ -62,12 +65,28 @@ function exportSnapshot(world, outputDir = null) {
     // Write to file
     fs.writeFileSync(filePath, json, 'utf8');
     
+    // Generate Daily Map Bundle (nations.json) under data/snapshots/map/YYYY-MM-DD/
+    const dateStr = `2026-08-${String(year).padStart(2, '0')}`;
+    const mapDir = path.join(outputDir, 'map', dateStr);
+    if (!fs.existsSync(mapDir)) {
+      fs.mkdirSync(mapDir, { recursive: true });
+    }
+
+    const mapBundle = buildDailyMapBundle(
+      snapshot.regions || [],
+      snapshot.nations || [],
+      dateStr
+    );
+    const mapFilePath = path.join(mapDir, 'nations.json');
+    fs.writeFileSync(mapFilePath, JSON.stringify(mapBundle, null, 2), 'utf8');
+
     // Get file size
     const stats = fs.statSync(filePath);
     
     return {
       success: true,
       filePath,
+      mapPath: mapFilePath,
       error: null,
       size: stats.size
     };
@@ -75,6 +94,7 @@ function exportSnapshot(world, outputDir = null) {
     return {
       success: false,
       filePath: null,
+      mapPath: null,
       error: error.message,
       size: 0
     };

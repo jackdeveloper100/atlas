@@ -20,6 +20,7 @@ import PricingPage from './pages/PricingPage';
 import TermsPage from './pages/TermsPage';
 import PrivacyPage from './pages/PrivacyPage';
 
+import ProjectionPage from './pages/projection/ProjectionPage';
 import ArchivePage from './pages/archive/ArchivePage';
 import LibraryPage from './pages/library/LibraryPage';
 import LibraryItemPage from './pages/library/LibraryItemPage';
@@ -58,7 +59,7 @@ function App() {
           <Route path="/privacy" element={<PrivacyPage />} />
         </Route>
 
-        {/* Main Authenticated Application Routes (Archive & Library) */}
+        {/* Main Authenticated Application Routes (Projection, Archive & Library) */}
         <Route
           element={
             <ProtectedRoute>
@@ -66,7 +67,7 @@ function App() {
             </ProtectedRoute>
           }
         >
-          <Route path="/projection" element={<ArchivePage />} />
+          <Route path="/projection" element={<ProjectionPage />} />
           <Route path="/archive" element={<ArchivePage />} />
           <Route path="/archive/:year" element={<ArchivePage />} />
           <Route path="/library" element={<LibraryPage />} />

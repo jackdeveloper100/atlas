@@ -1,0 +1,42 @@
+[
+  {
+    "id": "azure-bay",
+    "name": "Azure Bay",
+    "labelX": 550,
+    "labelY": 420,
+    "fontSize": 14,
+    "letterSpacing": "0.15em",
+    "fontStyle": "italic",
+    "color": "#4A626C"
+  },
+  {
+    "id": "northern-sea",
+    "name": "Northern Reach Sea",
+    "labelX": 710,
+    "labelY": 210,
+    "fontSize": 16,
+    "letterSpacing": "0.2em",
+    "fontStyle": "italic",
+    "color": "#4A626C"
+  },
+  {
+    "id": "central-strait",
+    "name": "Central Strait",
+    "labelX": 620,
+    "labelY": 580,
+    "fontSize": 13,
+    "letterSpacing": "0.12em",
+    "fontStyle": "italic",
+    "color": "#4A626C"
+  },
+  {
+    "id": "great-southern-ocean",
+    "name": "Great Southern Ocean",
+    "labelX": 810,
+    "labelY": 750,
+    "fontSize": 18,
+    "letterSpacing": "0.25em",
+    "fontStyle": "italic",
+    "color": "#4A626C"
+  }
+]

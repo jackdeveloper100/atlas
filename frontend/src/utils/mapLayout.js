@@ -6,6 +6,8 @@
  * Otherwise, a deterministic packed grid layout is calculated inside a 1000x600 SVG viewBox.
  */
 
+import { getFactionColor } from './factionColors';
+
 export function computeMapLayout(regions = [], nationsMap = {}) {
   if (!Array.isArray(regions) || regions.length === 0) {
     return [];
@@ -41,7 +43,7 @@ export function computeMapLayout(regions = [], nationsMap = {}) {
     const defaultCenterY = y + h / 2;
 
     const nation = nationsMap[region.nationId] || {};
-    const fillColor = region.mapColor || nation.color || '#3b82f6';
+    const fillColor = region.mapColor || nation.color || getFactionColor(region.nationId || nation.id || index + 1);
 
     return {
       ...region,

@@ -19,6 +19,8 @@
   ],
   "dependencies": {
     "dotenv": "^16.4.5",
+    "polygon-clipping": "^0.15.7",
+    "polylabel": "^1.1.0",
     "stripe": "^22.4.0"
   },
   "devDependencies": {
