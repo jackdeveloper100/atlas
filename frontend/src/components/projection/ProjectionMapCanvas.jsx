@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { ZoomIn, ZoomOut, RotateCcw, Crown, Shield, MapPin, Compass, Eye } from 'lucide-react';
 import { getFactionColor } from '../../utils/factionColors';
 import aquaticFeatures from '../../config/aquatic_features.json';
@@ -235,28 +235,294 @@ const DISSOLVED_NATION_BORDERS = [
   }
 ];
 
+const MIN_ZOOM = 1.0;
+const MAX_ZOOM = 8.0;
+
+/**
+ * Calculates the bounding box and center of a nation or subregion based on its SVG path(s).
+ */
+function getRegionBounds(entity) {
+  if (!entity) return { centerX: 500, centerY: 425, width: 200, height: 200 };
+
+  let pathStr = entity.dissolvedPath || entity.svgPath;
+
+  if (!pathStr && entity.nationId) {
+    const subregions = DEFAULT_SUBREGIONS.filter((s) => s.nationId === entity.nationId);
+    pathStr = subregions.map((s) => s.svgPath).join(' ');
+  }
+
+  if (!pathStr) {
+    const lx = entity.labelX || entity.capitalX || 500;
+    const ly = entity.labelY || entity.capitalY || 425;
+    return { minX: lx - 50, maxX: lx + 50, minY: ly - 50, maxY: ly + 50, centerX: lx, centerY: ly, width: 100, height: 100 };
+  }
+
+  const numbers = pathStr.match(/-?\d+(?:\.\d+)?/g);
+  if (!numbers || numbers.length < 2) {
+    const lx = entity.labelX || 500;
+    const ly = entity.labelY || 425;
+    return { minX: lx - 50, maxX: lx + 50, minY: ly - 50, maxY: ly + 50, centerX: lx, centerY: ly, width: 100, height: 100 };
+  }
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+
+  for (let i = 0; i < numbers.length; i += 2) {
+    const x = parseFloat(numbers[i]);
+    const y = parseFloat(numbers[i + 1]);
+    if (!isNaN(x) && !isNaN(y)) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  const width = Math.max(maxX - minX, 30);
+  const height = Math.max(maxY - minY, 30);
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  return { minX, maxX, minY, maxY, centerX, centerY, width, height };
+}
+
 export function ProjectionMapCanvas({ selectedRegion, onSelectRegion }) {
-  const [zoomScale, setZoomScale] = useState(1.0);
+  // Camera State: { x, y, zoom }
+  const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 1.0 });
   const [hoveredEntity, setHoveredEntity] = useState(null);
   const [clickedCapitalId, setClickedCapitalId] = useState(null);
+  const [isDraggingUI, setIsDraggingUI] = useState(false);
 
-  // Zoom threshold: < 1.8x is Nation View, >= 1.8x is Region View
-  const isRegionView = zoomScale >= 1.8;
+  const svgRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const isDraggingRef = useRef(false);
+  const hasMovedRef = useRef(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const cameraStartRef = useRef({ x: 0, y: 0 });
+  const touchStateRef = useRef({ initialDist: 0, initialZoom: 1, initialCenter: { viewX: 500, viewY: 425 } });
 
-  const handleZoomIn = () => setZoomScale((z) => Math.min(Number((z + 0.3).toFixed(1)), 3.0));
-  const handleZoomOut = () => setZoomScale((z) => Math.max(Number((z - 0.3).toFixed(1)), 1.0));
-  const handleResetZoom = () => setZoomScale(1.0);
+  // Threshold label: < 1.8x (Nation View), 1.8x - 4.0x (Region View), >= 4.0x (Local View)
+  const viewLevelLabel = useMemo(() => {
+    if (camera.zoom >= 4.0) return 'Local View (Zoom 3)';
+    if (camera.zoom >= 1.8) return 'Region View (Zoom 2)';
+    return 'Nation View (Zoom 1)';
+  }, [camera.zoom]);
 
+  const isRegionView = camera.zoom >= 1.8;
+
+  // Viewport Boundary Clamping
+  const clampCamera = useCallback(({ x, y, zoom }) => {
+    const clampedZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+    
+    // Bounds in SVG coordinate space (0..1000, 0..850)
+    const margin = 250;
+    const minX = 1000 - 1000 * clampedZoom - margin;
+    const maxX = margin;
+    const minY = 850 - 850 * clampedZoom - margin;
+    const maxY = margin;
+
+    const clampedX = Math.min(maxX, Math.max(minX, x));
+    const clampedY = Math.min(maxY, Math.max(minY, y));
+
+    return { x: clampedX, y: clampedY, zoom: clampedZoom };
+  }, []);
+
+  // Convert Client Screen (e.clientX, e.clientY) to SVG ViewBox (0..1000, 0..850)
+  const getSVGCoordinates = useCallback((clientX, clientY) => {
+    if (!svgRef.current) return { viewX: 500, viewY: 425 };
+    const rect = svgRef.current.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return { viewX: 500, viewY: 425 };
+
+    const viewX = ((clientX - rect.left) / rect.width) * 1000;
+    const viewY = ((clientY - rect.top) / rect.height) * 850;
+    return { viewX, viewY };
+  }, []);
+
+  // Smooth Camera Animation Helper
+  const animateCameraTo = useCallback((targetState, duration = 400) => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+    setCamera((currentCam) => {
+      const startCamera = { ...currentCam };
+      const targetCamera = clampCamera(targetState);
+      const startTime = performance.now();
+
+      const step = (now) => {
+        const elapsed = now - startTime;
+        const progress = Math.min(1, elapsed / duration);
+        // Ease-out cubic
+        const ease = 1 - Math.pow(1 - progress, 3);
+
+        const currentX = startCamera.x + (targetCamera.x - startCamera.x) * ease;
+        const currentY = startCamera.y + (targetCamera.y - startCamera.y) * ease;
+        const currentZoom = startCamera.zoom + (targetCamera.zoom - startCamera.zoom) * ease;
+
+        setCamera({ x: currentX, y: currentY, zoom: currentZoom });
+
+        if (progress < 1) {
+          animFrameRef.current = requestAnimationFrame(step);
+        }
+      };
+
+      animFrameRef.current = requestAnimationFrame(step);
+      return currentCam;
+    });
+  }, [clampCamera]);
+
+  // Focus Camera on Entity Center/Bounds
+  const focusOnEntity = useCallback((entity, customZoom) => {
+    if (!entity) return;
+    const bounds = getRegionBounds(entity);
+
+    const calcZoom = Math.min(5.5, Math.max(2.5, Math.min(750 / bounds.width, 600 / bounds.height)));
+    const targetZoom = customZoom || calcZoom;
+
+    const targetX = 500 - bounds.centerX * targetZoom;
+    const targetY = 425 - bounds.centerY * targetZoom;
+
+    animateCameraTo({ x: targetX, y: targetY, zoom: targetZoom });
+  }, [animateCameraTo]);
+
+  // Zoom centered around SVG ViewBox Point (viewX, viewY)
+  const zoomAroundPoint = useCallback((targetZoom, viewX, viewY) => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+    setCamera((prev) => {
+      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, targetZoom));
+      if (newZoom === prev.zoom) return prev;
+
+      const scaleFactor = newZoom / prev.zoom;
+      const newX = viewX - (viewX - prev.x) * scaleFactor;
+      const newY = viewY - (viewY - prev.y) * scaleFactor;
+
+      return clampCamera({ x: newX, y: newY, zoom: newZoom });
+    });
+  }, [clampCamera]);
+
+  // Top Bar Zoom Buttons
+  const handleZoomIn = () => zoomAroundPoint(camera.zoom + 0.6, 500, 425);
+  const handleZoomOut = () => zoomAroundPoint(camera.zoom - 0.6, 500, 425);
+  const handleResetZoom = () => animateCameraTo({ x: 0, y: 0, zoom: 1.0 });
+
+  // Wheel Zoom Anchoring Point Under Cursor
   const handleWheel = (e) => {
-    if (e.deltaY < 0) {
-      handleZoomIn();
-    } else {
-      handleZoomOut();
+    e.preventDefault();
+    const { viewX, viewY } = getSVGCoordinates(e.clientX, e.clientY);
+    const zoomDelta = e.deltaY < 0 ? 0.35 : -0.35;
+    zoomAroundPoint(camera.zoom + zoomDelta, viewX, viewY);
+  };
+
+  // Mouse Drag Panning Handlers
+  const handleMouseDown = (e) => {
+    if (e.button !== 0) return;
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+    isDraggingRef.current = true;
+    hasMovedRef.current = false;
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    cameraStartRef.current = { x: camera.x, y: camera.y };
+    setIsDraggingUI(true);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDraggingRef.current || !svgRef.current) return;
+
+    const deltaX = e.clientX - dragStartRef.current.x;
+    const deltaY = e.clientY - dragStartRef.current.y;
+
+    if (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4) {
+      hasMovedRef.current = true;
+    }
+
+    const rect = svgRef.current.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
+    const svgDeltaX = (deltaX / rect.width) * 1000;
+    const svgDeltaY = (deltaY / rect.height) * 850;
+
+    const newX = cameraStartRef.current.x + svgDeltaX;
+    const newY = cameraStartRef.current.y + svgDeltaY;
+
+    setCamera((prev) => clampCamera({ x: newX, y: newY, zoom: prev.zoom }));
+  };
+
+  const handleMouseUp = () => {
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      setIsDraggingUI(false);
     }
   };
 
+  // Touch Drag & Pinch Zoom Handlers
+  const handleTouchStart = (e) => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+    if (e.touches.length === 1) {
+      isDraggingRef.current = true;
+      hasMovedRef.current = false;
+      dragStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      cameraStartRef.current = { x: camera.x, y: camera.y };
+      setIsDraggingUI(true);
+    } else if (e.touches.length === 2) {
+      isDraggingRef.current = false;
+      setIsDraggingUI(false);
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      const { viewX, viewY } = getSVGCoordinates(midX, midY);
+
+      touchStateRef.current = {
+        initialDist: dist,
+        initialZoom: camera.zoom,
+        initialCenter: { viewX, viewY }
+      };
+    }
+  };
+
+  const handleTouchMove = (e) => {
+    if (e.touches.length === 1 && isDraggingRef.current && svgRef.current) {
+      const deltaX = e.touches[0].clientX - dragStartRef.current.x;
+      const deltaY = e.touches[0].clientY - dragStartRef.current.y;
+      if (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4) {
+        hasMovedRef.current = true;
+      }
+      const rect = svgRef.current.getBoundingClientRect();
+      const svgDeltaX = (deltaX / rect.width) * 1000;
+      const svgDeltaY = (deltaY / rect.height) * 850;
+
+      const newX = cameraStartRef.current.x + svgDeltaX;
+      const newY = cameraStartRef.current.y + svgDeltaY;
+
+      setCamera((prev) => clampCamera({ x: newX, y: newY, zoom: prev.zoom }));
+    } else if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const { initialDist, initialZoom, initialCenter } = touchStateRef.current;
+      if (initialDist > 0) {
+        const scale = dist / initialDist;
+        const targetZoom = initialZoom * scale;
+        zoomAroundPoint(targetZoom, initialCenter.viewX, initialCenter.viewY);
+      }
+    }
+  };
+
+  const handleTouchEnd = () => {
+    isDraggingRef.current = false;
+    setIsDraggingUI(false);
+  };
+
+  // Capital Token Click Handler
   const handleCapitalClick = (e, nation, capitalSubregion) => {
     e.stopPropagation();
+    if (hasMovedRef.current) return;
+
     setClickedCapitalId(nation.nationId);
     setTimeout(() => setClickedCapitalId(null), 600);
 
@@ -273,37 +539,55 @@ export function ProjectionMapCanvas({ selectedRegion, onSelectRegion }) {
     if (onSelectRegion) {
       onSelectRegion(targetRegion);
     }
+    focusOnEntity(targetRegion || nation);
   };
+
+  // Cleanup animation frame on unmount
+  useEffect(() => {
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []);
 
   return (
     <div
-      className="relative w-full h-full min-h-[calc(100vh-48px)] bg-[#BACAA3] overflow-hidden select-none"
+      ref={svgRef}
+      className={`relative w-full h-full min-h-[calc(100vh-48px)] bg-[#BACAA3] overflow-hidden select-none ${
+        isDraggingUI ? 'cursor-grabbing' : 'cursor-grab'
+      }`}
       onWheel={handleWheel}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
     >
       {/* Top Floating Control Bar */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-white/90 backdrop-blur-md px-4 py-2 rounded-2xl border border-stone-300 shadow-lg text-stone-800 font-sans text-xs">
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-white/90 backdrop-blur-md px-4 py-2 rounded-2xl border border-stone-300 shadow-lg text-stone-800 font-sans text-xs pointer-events-auto">
         {/* Zoom Mode Badge */}
         <div className="flex items-center gap-2 font-mono font-bold border-r border-stone-300 pr-3">
           <Eye className="w-4 h-4 text-amber-700" />
           <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wider">
-            {isRegionView ? 'Region View (Zoom 2)' : 'Nation View (Zoom 1)'}
+            {viewLevelLabel}
           </span>
           <span className="text-stone-400">|</span>
-          <span className="font-mono text-stone-600">{zoomScale.toFixed(1)}x</span>
+          <span className="font-mono text-stone-600">{camera.zoom.toFixed(1)}x</span>
         </div>
 
         {/* Zoom Controls */}
         <div className="flex items-center gap-1">
           <button
             onClick={handleZoomIn}
-            title="Zoom In (Region View)"
+            title="Zoom In"
             className="p-1.5 hover:bg-stone-100 rounded-lg text-stone-700 transition-colors cursor-pointer"
           >
             <ZoomIn className="w-4 h-4" />
           </button>
           <button
             onClick={handleZoomOut}
-            title="Zoom Out (Nation View)"
+            title="Zoom Out"
             className="p-1.5 hover:bg-stone-100 rounded-lg text-stone-700 transition-colors cursor-pointer"
           >
             <ZoomOut className="w-4 h-4" />
@@ -319,14 +603,15 @@ export function ProjectionMapCanvas({ selectedRegion, onSelectRegion }) {
       </div>
 
       {/* Map SVG Container */}
-      <div
-        className="w-full h-full flex items-center justify-center transition-transform duration-300 ease-out"
-        style={{ transform: `scale(${zoomScale})`, transformOrigin: 'center center' }}
-      >
+      <div className="w-full h-full flex items-center justify-center">
         <svg
           viewBox="0 0 1000 850"
-          className="w-full h-full object-cover max-h-[calc(100vh-48px)] drop-shadow-sm"
-          onClick={() => onSelectRegion && onSelectRegion(null)}
+          className="w-full h-full object-contain max-h-[calc(100vh-48px)] drop-shadow-sm"
+          onClick={() => {
+            if (!hasMovedRef.current && onSelectRegion) {
+              onSelectRegion(null);
+            }
+          }}
         >
           <defs>
             {/* Contested Subregion Diagonal Hatch Pattern */}
@@ -341,183 +626,201 @@ export function ProjectionMapCanvas({ selectedRegion, onSelectRegion }) {
             </filter>
           </defs>
 
-          {/* Cartographic Ocean / Coastline Guides */}
-          <g stroke="#8FA076" strokeWidth="1" fill="none" opacity="0.65">
-            <path d="M 520,380 Q 560,330 600,400 Q 550,480 490,420 Z" />
-            <path d="M 680,200 Q 740,160 780,230 Q 720,300 660,250 Z" />
-            <path d="M 720,410 Q 800,380 840,460 Q 760,520 700,460 Z" />
-            <path d="M 570,580 Q 680,550 720,680 Q 640,780 560,720 Q 540,650 570,580 Z" />
-          </g>
-
-          {/* Aquatic Feature Cartographic Labels */}
-          <g className="pointer-events-none select-none">
-            {aquaticFeatures.map((water) => (
-              <text
-                key={water.id}
-                x={water.labelX}
-                y={water.labelY}
-                fill={water.color || '#4A626C'}
-                fontSize={water.fontSize || 14}
-                fontStyle={water.fontStyle || 'italic'}
-                letterSpacing={water.letterSpacing || '0.15em'}
-                textAnchor="middle"
-                className="font-serif opacity-75 drop-shadow-xs"
-              >
-                {water.name}
-              </text>
-            ))}
-          </g>
-
-          {/* LAYER 1: NATION VIEW (Dissolved National Borders + Anchor Labels) when scale < 1.8x */}
-          {!isRegionView && (
-            <g className="transition-opacity duration-300">
-              {DISSOLVED_NATION_BORDERS.map((nation) => {
-                const isHovered = hoveredEntity?.id === nation.nationId;
-                const isSelected = selectedRegion && selectedRegion.nation === nation.name;
-
-                return (
-                  <g
-                    key={nation.nationId}
-                    className="cursor-pointer transition-all duration-200"
-                    onMouseEnter={() => setHoveredEntity({ id: nation.nationId, type: 'nation', name: nation.name })}
-                    onMouseLeave={() => setHoveredEntity(null)}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const capSub = DEFAULT_SUBREGIONS.find((s) => s.nationId === nation.nationId && s.isCapital);
-                      handleCapitalClick(e, nation, capSub);
-                    }}
-                  >
-                    {/* Precomputed Dissolved National Border Path */}
-                    <path
-                      d={nation.dissolvedPath}
-                      fill={nation.colorHex}
-                      stroke={isSelected ? '#000000' : isHovered ? '#111111' : '#3B4B28'}
-                      strokeWidth={isSelected ? '3.5' : isHovered ? '2.5' : '1.5'}
-                      opacity={isHovered ? '0.98' : '0.92'}
-                      className="transition-all duration-150 drop-shadow-sm"
-                    />
-
-                    {/* Precomputed Pole-of-Inaccessibility Nation Label */}
-                    <text
-                      x={nation.labelX}
-                      y={nation.labelY}
-                      fill="#FFFFFF"
-                      fontSize="14"
-                      fontWeight="bold"
-                      textAnchor="middle"
-                      className="pointer-events-none drop-shadow-md font-sans tracking-wider uppercase"
-                    >
-                      {nation.name}
-                    </text>
-                  </g>
-                );
-              })}
+          {/* Interactive Camera Transform Viewport Group */}
+          <g transform={`translate(${camera.x}, ${camera.y}) scale(${camera.zoom})`}>
+            {/* Cartographic Ocean / Coastline Guides */}
+            <g stroke="#8FA076" strokeWidth="1" fill="none" opacity="0.65">
+              <path d="M 520,380 Q 560,330 600,400 Q 550,480 490,420 Z" />
+              <path d="M 680,200 Q 740,160 780,230 Q 720,300 660,250 Z" />
+              <path d="M 720,410 Q 800,380 840,460 Q 760,520 700,460 Z" />
+              <path d="M 570,580 Q 680,550 720,680 Q 640,780 560,720 Q 540,650 570,580 Z" />
             </g>
-          )}
 
-          {/* LAYER 2: REGION VIEW (Individual Subregion Boundaries) when scale >= 1.8x */}
-          {isRegionView && (
-            <g className="transition-opacity duration-300">
-              {DEFAULT_SUBREGIONS.map((r) => {
-                const nationColor = getFactionColor(r.colorIndex);
-                const isSelected = selectedRegion?.id === r.id;
-                const isHovered = hoveredEntity?.id === r.id;
+            {/* Aquatic Feature Cartographic Labels */}
+            <g className="pointer-events-none select-none">
+              {aquaticFeatures.map((water) => (
+                <text
+                  key={water.id}
+                  x={water.labelX}
+                  y={water.labelY}
+                  fill={water.color || '#4A626C'}
+                  fontSize={water.fontSize || 14}
+                  fontStyle={water.fontStyle || 'italic'}
+                  letterSpacing={water.letterSpacing || '0.15em'}
+                  textAnchor="middle"
+                  className="font-serif opacity-75 drop-shadow-xs"
+                >
+                  {water.name}
+                </text>
+              ))}
+            </g>
 
-                return (
-                  <g
-                    key={r.id}
-                    className="cursor-pointer transition-all duration-200"
-                    onMouseEnter={() => setHoveredEntity({ id: r.id, type: 'region', name: r.name, nation: r.nationName })}
-                    onMouseLeave={() => setHoveredEntity(null)}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectRegion && onSelectRegion(r);
-                    }}
-                  >
-                    {/* Subregion Polygon Path */}
-                    <path
-                      d={r.svgPath}
-                      fill={nationColor}
-                      stroke={isSelected ? '#000000' : isHovered ? '#1B1B1B' : '#455A2A'}
-                      strokeWidth={isSelected ? '3.5' : isHovered ? '2.2' : '1.2'}
-                      opacity={isHovered ? '0.98' : '0.90'}
-                      className="transition-all duration-150 drop-shadow-xs"
-                    />
+            {/* LAYER 1: NATION VIEW (Dissolved National Borders + Anchor Labels) when zoom < 1.8x */}
+            {!isRegionView && (
+              <g className="transition-opacity duration-300">
+                {DISSOLVED_NATION_BORDERS.map((nation) => {
+                  const isHovered = hoveredEntity?.id === nation.nationId;
+                  const isSelected = selectedRegion && selectedRegion.nation === nation.name;
 
-                    {/* Precalculated Contested Subregion Hatch Overlay */}
-                    {r.isContested && (
+                  return (
+                    <g
+                      key={nation.nationId}
+                      className="cursor-pointer transition-all duration-200"
+                      onMouseEnter={() => setHoveredEntity({ id: nation.nationId, type: 'nation', name: nation.name })}
+                      onMouseLeave={() => setHoveredEntity(null)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (hasMovedRef.current) return;
+                        const capSub = DEFAULT_SUBREGIONS.find((s) => s.nationId === nation.nationId && s.isCapital);
+                        handleCapitalClick(e, nation, capSub);
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        focusOnEntity(nation);
+                      }}
+                    >
+                      {/* Precomputed Dissolved National Border Path */}
+                      <path
+                        d={nation.dissolvedPath}
+                        fill={nation.colorHex}
+                        stroke={isSelected ? '#000000' : isHovered ? '#111111' : '#3B4B28'}
+                        strokeWidth={isSelected ? '3.5' : isHovered ? '2.5' : '1.5'}
+                        opacity={isHovered ? '0.98' : '0.92'}
+                        className="transition-all duration-150 drop-shadow-sm"
+                      />
+
+                      {/* Precomputed Pole-of-Inaccessibility Nation Label */}
+                      <text
+                        x={nation.labelX}
+                        y={nation.labelY}
+                        fill="#FFFFFF"
+                        fontSize="14"
+                        fontWeight="bold"
+                        textAnchor="middle"
+                        className="pointer-events-none drop-shadow-md font-sans tracking-wider uppercase"
+                      >
+                        {nation.name}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            )}
+
+            {/* LAYER 2: REGION VIEW (Individual Subregion Boundaries) when zoom >= 1.8x */}
+            {isRegionView && (
+              <g className="transition-opacity duration-300">
+                {DEFAULT_SUBREGIONS.map((r) => {
+                  const nationColor = getFactionColor(r.colorIndex);
+                  const isSelected = selectedRegion?.id === r.id;
+                  const isHovered = hoveredEntity?.id === r.id;
+
+                  return (
+                    <g
+                      key={r.id}
+                      className="cursor-pointer transition-all duration-200"
+                      onMouseEnter={() => setHoveredEntity({ id: r.id, type: 'region', name: r.name, nation: r.nationName })}
+                      onMouseLeave={() => setHoveredEntity(null)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (hasMovedRef.current) return;
+                        if (onSelectRegion) onSelectRegion(r);
+                        focusOnEntity(r);
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        focusOnEntity(r);
+                      }}
+                    >
+                      {/* Subregion Polygon Path */}
                       <path
                         d={r.svgPath}
-                        fill="url(#contested-hatch)"
-                        pointerEvents="none"
+                        fill={nationColor}
+                        stroke={isSelected ? '#000000' : isHovered ? '#1B1B1B' : '#455A2A'}
+                        strokeWidth={isSelected ? '3.5' : isHovered ? '2.2' : '1.2'}
+                        opacity={isHovered ? '0.98' : '0.90'}
+                        className="transition-all duration-150 drop-shadow-xs"
                       />
-                    )}
 
-                    {/* Subregion Label */}
-                    <text
-                      x={r.labelX}
-                      y={r.labelY}
-                      fill="#FFFFFF"
-                      fontSize="11"
-                      fontWeight="bold"
-                      textAnchor="middle"
-                      className="pointer-events-none drop-shadow-md font-sans tracking-wide"
-                    >
-                      {r.name}
-                    </text>
+                      {/* Precalculated Contested Subregion Hatch Overlay */}
+                      {r.isContested && (
+                        <path
+                          d={r.svgPath}
+                          fill="url(#contested-hatch)"
+                          pointerEvents="none"
+                        />
+                      )}
+
+                      {/* Subregion Label */}
+                      <text
+                        x={r.labelX}
+                        y={r.labelY}
+                        fill="#FFFFFF"
+                        fontSize="11"
+                        fontWeight="bold"
+                        textAnchor="middle"
+                        className="pointer-events-none drop-shadow-md font-sans tracking-wide"
+                      >
+                        {r.name}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            )}
+
+            {/* LAYER 3: INTERACTABLE CAPITAL CITY TOKENS (Rendered on all zoom levels) */}
+            <g>
+              {DISSOLVED_NATION_BORDERS.map((nation) => {
+                const capSub = DEFAULT_SUBREGIONS.find((s) => s.nationId === nation.nationId && s.isCapital);
+                const cx = nation.capitalX;
+                const cy = nation.capitalY;
+                const isClicked = clickedCapitalId === nation.nationId;
+
+                return (
+                  <g
+                    key={`capital-${nation.nationId}`}
+                    transform={`translate(${cx}, ${cy})`}
+                    className="cursor-pointer group"
+                    onClick={(e) => handleCapitalClick(e, nation, capSub)}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      focusOnEntity(capSub || nation);
+                    }}
+                    onMouseEnter={() => setHoveredEntity({ id: `cap-${nation.nationId}`, type: 'capital', name: nation.capitalName, nation: nation.name })}
+                    onMouseLeave={() => setHoveredEntity(null)}
+                  >
+                    {/* Outer Pulsing Aura */}
+                    <circle
+                      r="12"
+                      fill={nation.colorHex}
+                      opacity="0.3"
+                      className="animate-ping group-hover:opacity-60 transition-opacity"
+                    />
+
+                    {/* Token Background Shield Badge */}
+                    <circle
+                      r="9"
+                      fill="#1E293B"
+                      stroke="#F59E0B"
+                      strokeWidth="2"
+                      filter="url(#capital-glow)"
+                      className={`transition-transform duration-200 group-hover:scale-125 ${isClicked ? 'scale-150 stroke-white' : ''}`}
+                    />
+
+                    {/* Inner Crown Vector Icon */}
+                    <g transform="translate(-5, -5) scale(0.42)">
+                      <path
+                        d="M2 4l3 12h14l3-12-6 7-4-8-4 8-6-7z"
+                        fill="#F59E0B"
+                        stroke="#FFFFFF"
+                        strokeWidth="1.5"
+                      />
+                    </g>
                   </g>
                 );
               })}
             </g>
-          )}
-
-          {/* LAYER 3: INTERACTABLE CAPITAL CITY TOKENS (Rendered on both view levels) */}
-          <g>
-            {DISSOLVED_NATION_BORDERS.map((nation) => {
-              const capSub = DEFAULT_SUBREGIONS.find((s) => s.nationId === nation.nationId && s.isCapital);
-              const cx = nation.capitalX;
-              const cy = nation.capitalY;
-              const isClicked = clickedCapitalId === nation.nationId;
-
-              return (
-                <g
-                  key={`capital-${nation.nationId}`}
-                  transform={`translate(${cx}, ${cy})`}
-                  className="cursor-pointer group"
-                  onClick={(e) => handleCapitalClick(e, nation, capSub)}
-                  onMouseEnter={() => setHoveredEntity({ id: `cap-${nation.nationId}`, type: 'capital', name: nation.capitalName, nation: nation.name })}
-                  onMouseLeave={() => setHoveredEntity(null)}
-                >
-                  {/* Outer Pulsing Aura */}
-                  <circle
-                    r="12"
-                    fill={nation.colorHex}
-                    opacity="0.3"
-                    className="animate-ping group-hover:opacity-60 transition-opacity"
-                  />
-
-                  {/* Token Background Shield Badge */}
-                  <circle
-                    r="9"
-                    fill="#1E293B"
-                    stroke="#F59E0B"
-                    strokeWidth="2"
-                    filter="url(#capital-glow)"
-                    className={`transition-transform duration-200 group-hover:scale-125 ${isClicked ? 'scale-150 stroke-white' : ''}`}
-                  />
-
-                  {/* Inner Crown Vector Icon */}
-                  <g transform="translate(-5, -5) scale(0.42)">
-                    <path
-                      d="M2 4l3 12h14l3-12-6 7-4-8-4 8-6-7z"
-                      fill="#F59E0B"
-                      stroke="#FFFFFF"
-                      strokeWidth="1.5"
-                    />
-                  </g>
-                </g>
-              );
-            })}
           </g>
         </svg>
       </div>
@@ -540,8 +843,8 @@ export function ProjectionMapCanvas({ selectedRegion, onSelectRegion }) {
           )}
           <div className="text-[10px] text-stone-400 font-mono mt-1">
             {hoveredEntity.type === 'capital'
-              ? '★ Click Capital Token to open Dossier Inspector Panel →'
-              : 'Click territory to inspect →'}
+              ? '★ Click Capital Token to inspect dossier & focus view →'
+              : 'Click or double-click territory to focus →'}
           </div>
         </div>
       )}
@@ -550,3 +853,4 @@ export function ProjectionMapCanvas({ selectedRegion, onSelectRegion }) {
 }
 
 export default ProjectionMapCanvas;
+
